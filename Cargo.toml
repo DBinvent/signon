@@ -1,0 +1,62 @@
+[package]
+name = "user_mgmt"
+version = "0.1.0"
+edition = "2021"
+license = "UNLICENSED"
+description = "Shared user management for the DBI/TA/QW backoffices: registration, email verification, login sessions, password reset and OAuth2 SSO"
+readme = "README.md"
+
+[lib]
+name = "user_mgmt"
+path = "src/lib.rs"
+
+[features]
+default = ["oauth"]
+# SSO (GitHub / LinkedIn / Google). Off means no reqwest, no outbound HTTP at
+# all — a site that only wants email+password does not pay for it.
+oauth = ["dep:reqwest", "dep:urlencoding"]
+
+[dependencies]
+axum = "0.8"
+axum-extra = { version = "0.10", features = ["cookie"] }
+tokio = { version = "1", features = ["rt", "macros", "time", "sync"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing = "0.1"
+anyhow = "1"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+sqlx = { version = "0.8", default-features = false, features = [
+    "runtime-tokio",
+    "tls-rustls",
+    "postgres",
+    "uuid",
+    "chrono",
+    # Only for `#[derive(FromRow)]`. The compile-time-checked `query!` macros
+    # are deliberately unused — they need a live database or a checked-in
+    # `.sqlx` cache at build time, which four consuming repos would each have
+    # to maintain.
+    "macros",
+] }
+argon2 = { version = "0.5", features = ["std"] }
+lettre = { version = "0.11", default-features = false, features = [
+    "tokio1-rustls-tls",
+    "smtp-transport",
+    "builder",
+] }
+time = "0.3"
+schema_guard_tokio = "1.10"
+sha2 = "0.10"
+base64 = "0.22"
+reqwest = { version = "0.12", default-features = false, features = [
+    "json",
+    "rustls-tls",
+], optional = true }
+urlencoding = { version = "2", optional = true }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full"] }
+# For the examples only: the library deliberately does not pull in a
+# subscriber, but `send` reports its outcome through `tracing`, so an example
+# that says "check the log" has to install one.
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

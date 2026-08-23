@@ -1,0 +1,439 @@
+# schema_guard schema for the shared user-management layer.
+#
+# Applied independently to each site database (dashta / registerta / qwbo /
+# dbinventbo) by `user_mgmt::migrate()` at startup — see DESIGN.md. Every site
+# runs the same schema; no identity is shared between them.
+#
+# NOTE on `description:` — schema_guard renders these into COMMENT ON
+# statements without escaping quotes, so an apostrophe here breaks the
+# generated SQL. Keep descriptions apostrophe-free (a real bug hit once
+# already, recorded in trust-atria-bo/bo-todo.md).
+database:
+  - schema:
+    schemaName: public
+    tables:
+
+      - table:
+          tableName: cd_template
+          description: Create and update timestamps
+          template: true
+          columns:
+            - column:
+                name: created_at
+                type: timestamptz
+                constraint:
+                  nullable: false
+                defaultValue: now()
+            - column:
+                name: updated_at
+                type: timestamptz
+                constraint:
+                  nullable: false
+                defaultValue: now()
+
+      - table:
+          tableName: users
+          description: One human account per row. Local password, federated identity, or both.
+          template: [cd_template]
+          columns:
+            - column:
+                name: id
+                type: uuid
+                constraint:
+                  primaryKey: true
+                  nullable: false
+                defaultValue: gen_random_uuid()
+            - column:
+                name: email
+                type: varchar(256)
+                constraint:
+                  nullable: false
+                sql: 'UNIQUE'
+                description: Always stored lowercased and trimmed. Enforced in application code, not a trigger, to keep this schema portable.
+            - column:
+                name: password_hash
+                type: varchar(256)
+                description: argon2id PHC string. NULL for accounts created through SSO that never set a local password.
+            - column:
+                name: display_name
+                type: varchar(256)
+                description: Optional, supplied at registration or by the SSO provider profile.
+            - column:
+                name: email_verified
+                type: bool
+                constraint:
+                  nullable: false
+                defaultValue: "false"
+            - column:
+                name: verify_token_hash
+                type: varchar(64)
+                description: sha256 hex of the emailed verification token. The token itself is 32 random bytes and is never stored, so a database read cannot activate an account.
+            - column:
+                name: verify_code
+                type: varchar(10)
+                description: Short numeric code for the type-it-in confirmation path. Guarded by verify_attempts, not by secrecy.
+            - column:
+                name: verify_attempts
+                type: int
+                constraint:
+                  nullable: false
+                defaultValue: "0"
+                description: Wrong short-code submissions since the last send. Reset on each resend, capped in application code.
+            - column:
+                name: verify_sent_at
+                type: timestamptz
+                description: Last verification send, for the resend cooldown and for token expiry.
+            - column:
+                name: suspended
+                type: bool
+                constraint:
+                  nullable: false
+                defaultValue: "false"
+            - column:
+                name: last_login_at
+                type: timestamptz
+
+      - table:
+          tableName: user_identities
+          description: Federated logins. One row per provider account linked to a user, so one user can hold several.
+          constraint: 'UNIQUE (provider, provider_user_id)'
+          columns:
+            - column:
+                name: id
+                type: bigserial
+                constraint:
+                  primaryKey: true
+                  nullable: false
+            - column:
+                name: user_id
+                type: uuid
+                constraint:
+                  nullable: false
+                  foreignKey:
+                    references: users
+                index: true
+            - column:
+                name: provider
+                type: varchar(32)
+                constraint:
+                  nullable: false
+                description: github, linkedin, google — the key in the provider registry.
+            - column:
+                name: provider_user_id
+                type: varchar(190)
+                constraint:
+                  nullable: false
+                description: Stable subject id at the provider. Never the email, which the user can change.
+            - column:
+                name: email
+                type: varchar(256)
+                description: Address the provider reported at link time, kept for audit only. The authoritative address is users.email.
+            - column:
+                name: created_at
+                type: timestamptz
+                constraint:
+                  nullable: false
+                defaultValue: now()
+
+      - table:
+          tableName: password_resets
+          description: One-time password reset tokens. A row on its own proves nothing — check used and the created_at age in application code.
+          columns:
+            - column:
+                name: id
+                type: bigserial
+                constraint:
+                  primaryKey: true
+                  nullable: false
+            - column:
+                name: user_id
+                type: uuid
+                constraint:
+                  nullable: false
+                  foreignKey:
+                    references: users
+                index: true
+            - column:
+                name: token_hash
+                type: varchar(64)
+                constraint:
+                  nullable: false
+                sql: 'UNIQUE'
+                description: sha256 hex of the emailed token. The token itself is never stored.
+            - column:
+                name: used
+                type: bool
+                constraint:
+                  nullable: false
+                defaultValue: "false"
+            - column:
+                name: created_at
+                type: timestamptz
+                constraint:
+                  nullable: false
+                defaultValue: now()
+
+      - table:
+          tableName: sessions
+          description: Opaque server-side sessions. The cookie carries a random token, this table holds only its hash.
+          columns:
+            - column:
+                name: id
+                type: uuid
+                constraint:
+                  primaryKey: true
+                  nullable: false
+                defaultValue: gen_random_uuid()
+                description: Stable handle for listing and revoking a session. Not the cookie value.
+            - column:
+                name: token_hash
+                type: varchar(64)
+                constraint:
+                  nullable: false
+                sql: 'UNIQUE'
+                description: sha256 hex of the session token. Reading this table does not yield a usable cookie.
+            - column:
+                name: user_id
+                type: uuid
+                constraint:
+                  nullable: false
+                  foreignKey:
+                    references: users
+                index: true
+            - column:
+                name: ip
+                type: varchar(64)
+            - column:
+                name: user_agent
+                type: varchar(256)
+            - column:
+                name: created_at
+                type: timestamptz
+                constraint:
+                  nullable: false
+                defaultValue: now()
+            - column:
+                name: last_seen_at
+                type: timestamptz
+                constraint:
+                  nullable: false
+                defaultValue: now()
+            - column:
+                name: expires_at
+                type: timestamptz
+                constraint:
+                  nullable: false
+
+      - table:
+          tableName: roles
+          description: Role names this deployment recognises. Seeded at startup from the Config roles list.
+          columns:
+            - column:
+                name: id
+                type: serial
+                constraint:
+                  primaryKey: true
+                  nullable: false
+            - column:
+                name: name
+                type: varchar(64)
+                constraint:
+                  nullable: false
+                sql: 'UNIQUE'
+            - column:
+                name: description
+                type: varchar(256)
+                constraint:
+                  nullable: false
+                defaultValue: "''"
+
+      - table:
+          tableName: user_roles
+          description: Role grants. Read per request rather than baked into a token, so a revocation takes effect immediately.
+          constraint: 'UNIQUE (user_id, role_id)'
+          columns:
+            - column:
+                name: id
+                type: bigserial
+                constraint:
+                  primaryKey: true
+                  nullable: false
+            - column:
+                name: user_id
+                type: uuid
+                constraint:
+                  nullable: false
+                  foreignKey:
+                    references: users
+                index: true
+            - column:
+                name: role_id
+                type: int
+                constraint:
+                  nullable: false
+                  foreignKey:
+                    references: roles
+                index: true
+            - column:
+                name: created_at
+                type: timestamptz
+                constraint:
+                  nullable: false
+                defaultValue: now()
+
+      - table:
+          tableName: auth_events
+          description: Audit trail of authentication activity. Append only, never carries a password or a token.
+          columns:
+            - column:
+                name: id
+                type: bigserial
+                constraint:
+                  primaryKey: true
+                  nullable: false
+            - column:
+                name: user_id
+                type: uuid
+                constraint:
+                  foreignKey:
+                    references: users
+                index: true
+                description: NULL when the attempt did not resolve to an account, which is itself worth recording.
+            - column:
+                name: email
+                type: varchar(256)
+                description: Address the request was made against, lowercased.
+            - column:
+                name: kind
+                type: varchar(32)
+                constraint:
+                  nullable: false
+                description: register, verify, login_ok, login_fail, logout, reset_request, reset_confirm, password_change, oauth_link, oauth_login.
+            - column:
+                name: ip
+                type: varchar(64)
+            - column:
+                name: user_agent
+                type: varchar(256)
+            - column:
+                name: created_at
+                type: timestamptz
+                constraint:
+                  nullable: false
+                defaultValue: now()
+                index: true
+
+      - table:
+          tableName: oauth_states
+          description: Short lived CSRF state and PKCE verifier for an in-flight authorization code flow. Rows are consumed on callback and swept on age.
+          columns:
+            - column:
+                name: state_hash
+                type: varchar(64)
+                constraint:
+                  primaryKey: true
+                  nullable: false
+                description: sha256 hex of the state value handed to the provider.
+            - column:
+                name: provider
+                type: varchar(32)
+                constraint:
+                  nullable: false
+            - column:
+                name: pkce_verifier
+                type: varchar(128)
+                constraint:
+                  nullable: false
+            - column:
+                name: link_user_id
+                type: uuid
+                constraint:
+                  foreignKey:
+                    references: users
+                description: Set when an already logged in user is linking a second provider rather than signing in.
+            - column:
+                name: redirect_to
+                type: varchar(512)
+                description: Site relative path to send the browser to after a successful callback. Validated to start with a single slash.
+            - column:
+                name: created_at
+                type: timestamptz
+                constraint:
+                  nullable: false
+                defaultValue: now()
+
+      - table:
+          tableName: subscribers
+          description: |
+            Mailing list for product updates and news. Entirely separate from users — subscribing is not
+            registering, and an account holder is not on this list unless they asked to be.
+            Ported from the trust-atria-landing waitlist, which stores the same thing in Cloudflare D1;
+            here it lives in the home Postgres alongside everything else.
+          columns:
+            - column:
+                name: id
+                type: bigserial
+                constraint:
+                  primaryKey: true
+                  nullable: false
+            - column:
+                name: email
+                type: varchar(256)
+                constraint:
+                  nullable: false
+                sql: 'UNIQUE'
+                description: Lowercased and trimmed in application code.
+            - column:
+                name: source
+                type: varchar(64)
+                description: Which page or site the signup came from, so one list can serve several entry points.
+            - column:
+                name: confirmed
+                type: bool
+                constraint:
+                  nullable: false
+                defaultValue: "false"
+                description: Double opt in. Only confirmed rows may be mailed anything but the confirmation itself.
+            - column:
+                name: confirmed_at
+                type: timestamptz
+            - column:
+                name: confirm_token_hash
+                type: varchar(64)
+                description: sha256 hex of the emailed confirmation token. Cleared once used.
+            - column:
+                name: confirm_sent_at
+                type: timestamptz
+                description: Last confirmation send, for the resend cooldown.
+            - column:
+                name: unsubscribe_token
+                type: varchar(64)
+                constraint:
+                  nullable: false
+                sql: 'UNIQUE'
+                description: |
+                  Stored in the clear, unlike every other token in this schema, and deliberately so. Each
+                  newsletter has to put a working unsubscribe link next to this address, which is impossible
+                  if only a hash is kept. The capability it grants is removing an address from a mailing
+                  list, so a database read that yields it costs nothing an attacker with database access
+                  could not already do.
+            - column:
+                name: unsubscribed_at
+                type: timestamptz
+                description: Set rather than deleting the row, so a later resubscribe is a state change and an accidental unsubscribe is recoverable.
+            - column:
+                name: ip
+                type: varchar(64)
+            - column:
+                name: user_agent
+                type: varchar(256)
+            - column:
+                name: referer
+                type: varchar(512)
+            - column:
+                name: created_at
+                type: timestamptz
+                constraint:
+                  nullable: false
+                defaultValue: now()
+                index: true
