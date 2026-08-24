@@ -77,6 +77,18 @@ pub struct Config {
     pub roles: Vec<String>,
     /// Roles granted to every newly registered account.
     pub default_roles: Vec<String>,
+
+    /// Loopback URL of a sibling site's `GET /internal/email-verified` —
+    /// see `routes::cross_verified`. `None` (the default) disables the
+    /// feature entirely: a deployment that never sets `CROSS_VERIFY_URL`
+    /// behaves exactly as if this crate had no such thing.
+    #[cfg(feature = "cross-verify")]
+    pub cross_verify_url: Option<String>,
+    /// Shared secret presented to (and required from) the sibling's
+    /// endpoint — required whenever `cross_verify_url` is set, or every
+    /// call answers unauthorized and the feature is silently a no-op.
+    #[cfg(feature = "cross-verify")]
+    pub cross_verify_secret: Option<String>,
 }
 
 impl Config {
@@ -102,6 +114,10 @@ impl Config {
             max_verify_attempts: 5,
             roles: vec!["admin".to_string(), "user".to_string()],
             default_roles: vec!["user".to_string()],
+            #[cfg(feature = "cross-verify")]
+            cross_verify_url: None,
+            #[cfg(feature = "cross-verify")]
+            cross_verify_secret: None,
         }
     }
 
@@ -113,6 +129,8 @@ impl Config {
     ///   services already set in their unit files.
     /// - `ALLOWED_ORIGINS` — comma separated
     /// - `INSECURE_COOKIES=1` — local plain-HTTP dev only
+    /// - `CROSS_VERIFY_URL` / `CROSS_VERIFY_SECRET` — see `cross_verify_url`'s
+    ///   own doc comment (only with the `cross-verify` feature)
     pub fn with_env(mut self) -> Self {
         if let Ok(url) = std::env::var("APP_BASE_URL") {
             let url = url.trim_end_matches('/').to_string();
@@ -146,6 +164,15 @@ impl Config {
                  Local development only."
             );
             self.secure_cookies = false;
+        }
+        #[cfg(feature = "cross-verify")]
+        {
+            if let Ok(url) = std::env::var("CROSS_VERIFY_URL") {
+                self.cross_verify_url = Some(url);
+            }
+            if let Ok(secret) = std::env::var("CROSS_VERIFY_SECRET") {
+                self.cross_verify_secret = Some(secret);
+            }
         }
         self
     }

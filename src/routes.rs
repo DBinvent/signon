@@ -104,6 +104,61 @@ pub(crate) fn ok() -> (StatusCode, Json<Value>) {
     (StatusCode::OK, Json(json!({ "status": "ok" })))
 }
 
+// ---- cross-site email verification -----------------------------------------
+
+/// Asks a sibling site (if `cross_verify_url`/`cross_verify_secret` are
+/// configured) whether `email` already has a verified account there — see
+/// `Config::cross_verify_url`'s doc. `false` on any error, timeout,
+/// non-2xx, or when the feature isn't configured: this must fail toward
+/// "still requires its own verification," never toward silently marking an
+/// unproven address verified, so a network hiccup or a misconfigured
+/// secret degrades to the pre-existing behavior rather than a false
+/// positive.
+///
+/// Callers ([`crate::routes::register`], [`crate::routes::resend_verify`])
+/// must call this only from a point in the handler that does not change the
+/// HTTP response shape based on its result — the account this crate
+/// otherwise takes not to reveal via its own public routes (see this
+/// module's doc comment) must not become discoverable through response
+/// *shape* even though the sibling's own answer is, by construction,
+/// gated behind a shared secret at the HTTP layer.
+#[cfg(feature = "cross-verify")]
+async fn cross_verified(state: &AccountState, email: &str) -> bool {
+    let (Some(url), Some(secret)) =
+        (&state.config.cross_verify_url, &state.config.cross_verify_secret)
+    else {
+        return false;
+    };
+
+    #[derive(Deserialize)]
+    struct CrossVerifyResp {
+        verified: bool,
+    }
+
+    let result = state.http.get(url).bearer_auth(secret).query(&[("email", email)]).send().await;
+    match result {
+        Ok(resp) if resp.status().is_success() => {
+            resp.json::<CrossVerifyResp>().await.map(|b| b.verified).unwrap_or(false)
+        }
+        Ok(resp) => {
+            tracing::warn!(status = %resp.status(), "cross-verify request rejected");
+            false
+        }
+        Err(e) => {
+            tracing::warn!(%e, "cross-verify request failed");
+            false
+        }
+    }
+}
+
+/// Feature off — always the safe default, no network call. Kept as a
+/// same-signature stub so `register`/`resend_verify` never need their own
+/// `#[cfg]`.
+#[cfg(not(feature = "cross-verify"))]
+async fn cross_verified(_state: &AccountState, _email: &str) -> bool {
+    false
+}
+
 /// Deliberately loose. Real deliverability is decided by whether the
 /// confirmation mail arrives, not by a regex, and every regex strict enough to
 /// feel useful rejects addresses that are actually valid.
@@ -232,17 +287,30 @@ async fn register(
         .map(str::trim)
         .filter(|s| !s.is_empty() && s.len() <= 256);
 
-    match db::create_user(&state.pool, &email, Some(&hash), display_name, false).await {
-        // New account: arm the challenge and send the mail. Already taken
-        // (`None`, the ON CONFLICT case): do neither — but the response below
-        // is identical either way, so registration cannot be used to test
-        // whether an address has an account.
+    // After every response-affecting gate above, before the one DB write
+    // below: `already_verified` only changes internal behavior (the row's
+    // initial `email_verified` flag, and whether mail gets sent), never the
+    // HTTP response — see `cross_verified`'s doc comment for why that must
+    // stay true.
+    let already_verified = cross_verified(&state, &email).await;
+
+    match db::create_user(&state.pool, &email, Some(&hash), display_name, already_verified).await {
+        // New account: arm the challenge and send the mail — unless a
+        // sibling site already vouches for this address, in which case
+        // there is nothing to verify. Already taken (`None`, the ON
+        // CONFLICT case): do neither — but the response below is identical
+        // either way, so registration cannot be used to test whether an
+        // address has an account.
         Ok(Some(user_id)) => {
             if let Err(e) = db::grant_roles(&state.pool, user_id, &state.config.default_roles).await
             {
                 tracing::error!(%e, "grant default roles");
             }
-            send_verification(&state, user_id, &email).await;
+            if already_verified {
+                tracing::info!(%user_id, "email already verified on a sibling site — skipping verification mail");
+            } else {
+                send_verification(&state, user_id, &email).await;
+            }
             db::log_event(
                 &state.pool,
                 "register",
@@ -460,16 +528,28 @@ async fn resend_verify(
     }
 
     if let Ok(Some(user)) = db::find_user_by_email(&state.pool, &email).await {
-        let cooled = user
-            .verify_sent_at
-            .map(|sent| {
-                chrono::Utc::now() - sent
-                    > chrono::Duration::from_std(state.config.resend_cooldown)
-                        .unwrap_or_else(|_| chrono::Duration::seconds(60))
-            })
-            .unwrap_or(true);
-        if !user.email_verified && !user.suspended && cooled {
-            send_verification(&state, user.id, &email).await;
+        if !user.email_verified && !user.suspended {
+            // A sibling site vouching for this address settles it outright —
+            // no cooldown check, no mail, nothing left to resend. Response
+            // stays `ok()` either way (see this fn's doc comment), so this
+            // cannot be used to probe cross-site verification status.
+            if cross_verified(&state, &email).await {
+                if let Err(e) = db::mark_email_verified(&state.pool, user.id).await {
+                    tracing::error!(%e, "mark_email_verified via cross-verify");
+                }
+            } else {
+                let cooled = user
+                    .verify_sent_at
+                    .map(|sent| {
+                        chrono::Utc::now() - sent
+                            > chrono::Duration::from_std(state.config.resend_cooldown)
+                                .unwrap_or_else(|_| chrono::Duration::seconds(60))
+                    })
+                    .unwrap_or(true);
+                if cooled {
+                    send_verification(&state, user.id, &email).await;
+                }
+            }
         }
     }
 

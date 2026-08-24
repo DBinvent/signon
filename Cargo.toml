@@ -15,6 +15,12 @@ default = ["oauth"]
 # SSO (GitHub / LinkedIn / Google). Off means no reqwest, no outbound HTTP at
 # all — a site that only wants email+password does not pay for it.
 oauth = ["dep:reqwest", "dep:urlencoding"]
+# Cross-site "is this email already verified elsewhere?" check — see
+# config::Config::cross_verify_url and routes::cross_verified. Independent
+# of `oauth`: a deployment can want one without the other. Shares the same
+# optional `reqwest` dep (Cargo unions feature -> dep edges, so enabling
+# both does not link reqwest twice).
+cross-verify = ["dep:reqwest"]
 
 [dependencies]
 axum = "0.8"

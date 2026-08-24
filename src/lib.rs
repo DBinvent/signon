@@ -61,6 +61,10 @@ pub struct AccountState {
     pub limiter: Arc<RateLimiter>,
     #[cfg(feature = "oauth")]
     pub oauth: Arc<Vec<oauth::Configured>>,
+    /// For `routes::cross_verified`'s call to the sibling site — a short
+    /// timeout so a slow or hung sibling cannot stall registration/resend.
+    #[cfg(feature = "cross-verify")]
+    pub http: reqwest::Client,
 }
 
 impl AccountState {
@@ -113,6 +117,11 @@ impl AccountState {
             limiter: Arc::new(RateLimiter::new()),
             #[cfg(feature = "oauth")]
             oauth,
+            #[cfg(feature = "cross-verify")]
+            http: reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(3))
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new()),
         })
     }
 
@@ -199,4 +208,22 @@ pub async fn user_id_by_email(pool: &PgPool, email: &str) -> anyhow::Result<Opti
     Ok(db::find_user_by_email(pool, &email.trim().to_lowercase())
         .await?
         .map(|u| u.id))
+}
+
+/// Whether `email` has a verified account in *this* service's own database.
+/// `false` for both "no such account" and "account exists but unverified" —
+/// deliberately not distinguishable, same reasoning as everywhere else in
+/// this crate that touches an email address (see `routes.rs`'s module doc).
+///
+/// For a service's own `/internal/email-verified` endpoint, answering the
+/// sibling site's `routes::cross_verified` call — see that function's doc
+/// for why this must sit behind a shared secret rather than being left open
+/// the way `/internal/crl`/`/internal/report` are elsewhere in this
+/// ecosystem: this specific boolean is exactly the kind of thing this crate
+/// otherwise goes out of its way never to reveal to an anonymous caller.
+pub async fn is_email_verified(pool: &PgPool, email: &str) -> anyhow::Result<bool> {
+    Ok(db::find_user_by_email(pool, &email.trim().to_lowercase())
+        .await?
+        .map(|u| u.email_verified)
+        .unwrap_or(false))
 }
