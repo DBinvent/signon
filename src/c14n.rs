@@ -204,13 +204,13 @@ pub fn parse(input: &str) -> anyhow::Result<Doc> {
                 if stack.len() >= MAX_DEPTH {
                     anyhow::bail!("document too deeply nested");
                 }
-                let (prefix, local) = split_qname(std::str::from_utf8(start.name().as_ref())?)?;
+                let (prefix, local) = split_qname(start.name().as_ref())?;
                 let mut ns_decls = Vec::new();
                 let mut raw_attrs = Vec::new();
                 for attr in start.attributes().with_checks(true) {
                     let attr = attr?;
-                    let key = std::str::from_utf8(attr.key.as_ref())?.to_string();
-                    let value = normalize_attr_value(std::str::from_utf8(&attr.value)?)?;
+                    let key = attr.key.as_ref().to_string();
+                    let value = normalize_attr_value(&attr.value)?;
                     if key == "xmlns" {
                         ns_decls.push((None, value));
                     } else if let Some(p) = key.strip_prefix("xmlns:") {
@@ -284,7 +284,7 @@ pub fn parse(input: &str) -> anyhow::Result<Doc> {
                 stack.pop();
             }
             Event::Text(text) => {
-                let raw = std::str::from_utf8(&text)?;
+                let raw: &str = &text;
                 push_text(&mut doc, &stack, raw)?;
             }
             Event::GeneralRef(reference) => {
@@ -294,18 +294,18 @@ pub fn parse(input: &str) -> anyhow::Result<Doc> {
                         .ok_or_else(|| anyhow::anyhow!("bad character reference"))?
                         .to_string()
                 } else {
-                    predefined_entity(std::str::from_utf8(&reference)?)?.to_string()
+                    predefined_entity(&reference)?.to_string()
                 };
                 push_text(&mut doc, &stack, &resolved)?;
             }
             Event::CData(cdata) => {
-                let raw = std::str::from_utf8(&cdata)?;
+                let raw: &str = &cdata;
                 push_text(&mut doc, &stack, raw)?;
             }
             Event::PI(pi) => {
                 if let Some(&parent) = stack.last() {
-                    let target = std::str::from_utf8(pi.target())?.to_string();
-                    let content = std::str::from_utf8(pi.content())?.trim_start().to_string();
+                    let target = pi.target().to_string();
+                    let content = pi.content().trim_start().to_string();
                     let id = doc.nodes.len();
                     doc.nodes.push(Node {
                         parent: Some(parent),

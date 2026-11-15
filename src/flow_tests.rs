@@ -1597,8 +1597,9 @@ mod mail_runs {
     async fn fresh_pool(name: &str) -> Option<sqlx::PgPool> {
         let shared = pool().await?;
         let db = format!("signon_test_{name}");
-        sqlx::query(&format!("DROP DATABASE IF EXISTS {db} WITH (FORCE)")).execute(&shared).await.ok()?;
-        sqlx::query(&format!("CREATE DATABASE {db}")).execute(&shared).await.ok()?;
+        // [sqlx 0.9] the name is this test's own word, not a value from outside
+        sqlx::query(sqlx::AssertSqlSafe(format!("DROP DATABASE IF EXISTS {db} WITH (FORCE)"))).execute(&shared).await.ok()?;
+        sqlx::query(sqlx::AssertSqlSafe(format!("CREATE DATABASE {db}"))).execute(&shared).await.ok()?;
         let url = std::env::var("SIGNON_TEST_DB")
             .unwrap_or_else(|_| "postgres:///signon_test?host=/var/run/postgresql".to_string())
             .replacen("signon_test", &db, 1);

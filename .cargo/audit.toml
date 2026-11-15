@@ -1,7 +1,21 @@
 # cargo audit's settings for signon (.github/workflows/audit.yml, and `cargo audit` here).
 [advisories]
-# RUSTSEC-2026-0459, libsqlite3-sys (the C SQLite it bundles): ignored (2026-11-14) because it is not built.
-# sqlx 0.8 names its SQLite driver in every lock file, whatever features are on; this crate takes the
-# postgres one only (`cargo tree -i libsqlite3-sys`: nothing). sqlx 0.8 pins libsqlite3-sys 0.30; the fixed
-# 0.39 comes with sqlx 0.9. Drop this with the move to sqlx 0.9.
-ignore = ["RUSTSEC-2026-0459"]
+# RUSTSEC-2023-0071, rsa (the Marvin attack: a timing side channel on operations with an RSA
+# private key): ignored (2026-11-15). There is no fixed 0.9, and jsonwebtoken 11's rust_crypto
+# backend pins rsa 0.9. This crate holds no RSA private key in that backend: jsonwebtoken only
+# verifies providers' RS256 id_tokens there, with their public keys.
+#
+# RUSTSEC-2026-0387, crypto-bigint 0.5 (timing variability in operations meant to be constant
+# time): ignored (2026-11-15). It comes with p256 and p384 (elliptic-curve 0.13) in the same
+# backend; the fixed 0.7 needs elliptic-curve 0.14, which jsonwebtoken 11 does not take.
+# Verifying ES256 id_tokens uses public keys only. The one use of a secret key is Apple's client
+# secret (jwt::apple_client_secret: ES256 with the site's Apple key, at each code exchange): a
+# site with Apple sign-in that will not carry this builds with `jwt-aws-lc` in place of
+# `jwt-rust-crypto` - aws-lc-rs signs there, and none of these crates is in that build.
+#
+# RUSTSEC-2026-0459, libsqlite3-sys (the C SQLite it bundles): ignored (2026-11-14) because it is
+# not built. sqlx names its SQLite driver in every lock file, whatever features are on; this crate
+# takes the postgres one only (`cargo tree -i libsqlite3-sys`: nothing). sqlx 0.9.0 (here since
+# 2026-11-15) still asks for libsqlite3-sys below 0.38 and the fix is 0.39 - the earlier note
+# here, that it would come with sqlx 0.9, was wrong. Drop this when a sqlx takes 0.39.
+ignore = ["RUSTSEC-2023-0071", "RUSTSEC-2026-0387", "RUSTSEC-2026-0459"]

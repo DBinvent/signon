@@ -19,6 +19,13 @@ use uuid::Uuid;
 
 // ---- users ---------------------------------------------------------------
 
+/// [sqlx 0.9] A statement put together here from this file's own constant parts - a column list,
+/// a condition - and placeholders, never from a caller's text: every value still goes in as a
+/// bind. sqlx 0.9 takes a literal as it is and asks for this of anything built at run time.
+fn own_sql(sql: String) -> sqlx::AssertSqlSafe<String> {
+    sqlx::AssertSqlSafe(sql)
+}
+
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct User {
     pub id: Uuid,
@@ -84,7 +91,7 @@ pub async fn create_user_without_email(pool: &PgPool, display_name: Option<&str>
 /// NULL.
 pub async fn find_user_by_email(pool: &PgPool, email: &str) -> anyhow::Result<Option<User>> {
     Ok(
-        sqlx::query_as::<_, User>(&format!("SELECT {USER_FIELDS} FROM users WHERE email = $1"))
+        sqlx::query_as::<_, User>(own_sql(format!("SELECT {USER_FIELDS} FROM users WHERE email = $1")))
             .bind(email)
             .fetch_optional(pool)
             .await?,
@@ -93,7 +100,7 @@ pub async fn find_user_by_email(pool: &PgPool, email: &str) -> anyhow::Result<Op
 
 pub async fn find_user_by_id(pool: &PgPool, id: Uuid) -> anyhow::Result<Option<User>> {
     Ok(
-        sqlx::query_as::<_, User>(&format!("SELECT {USER_FIELDS} FROM users WHERE id = $1"))
+        sqlx::query_as::<_, User>(own_sql(format!("SELECT {USER_FIELDS} FROM users WHERE id = $1")))
             .bind(id)
             .fetch_optional(pool)
             .await?,
@@ -253,7 +260,7 @@ pub async fn claim_mail(
     kind: &str,
     new_token: &str,
 ) -> anyhow::Result<Option<MailClaim>> {
-    let row = sqlx::query_as::<_, (i64, String, String)>(&format!(
+    let row = sqlx::query_as::<_, (i64, String, String)>(own_sql(format!(
         "WITH u AS ( \
            UPDATE users u SET unsubscribe_token = COALESCE(u.unsubscribe_token, $3) \
            WHERE u.id = $1 AND {MAIL_TO} \
@@ -269,7 +276,7 @@ pub async fn claim_mail(
            RETURNING id \
          ) \
          SELECT claimed.id, u.email, u.unsubscribe_token FROM claimed CROSS JOIN u"
-    ))
+    )))
     .bind(user_id)
     .bind(kind)
     .bind(new_token)
@@ -308,11 +315,11 @@ pub async fn finish_mail(
 /// Whether `kind` would still go to this account — the cheap check before a
 /// template is fetched. The claim re-checks all of it.
 pub async fn mail_owed(pool: &PgPool, user_id: Uuid, kind: &str) -> anyhow::Result<bool> {
-    Ok(sqlx::query_scalar::<_, bool>(&format!(
+    Ok(sqlx::query_scalar::<_, bool>(own_sql(format!(
         "SELECT {MAIL_TO} AND NOT EXISTS (SELECT 1 FROM mail_log m WHERE m.user_id = u.id \
            AND m.kind = $2 AND {ALREADY}) \
          FROM users u WHERE u.id = $1"
-    ))
+    )))
     .bind(user_id)
     .bind(kind)
     .fetch_optional(pool)
@@ -346,7 +353,7 @@ fn audience_sql(after: bool, count: bool) -> String {
 /// How many accounts `kind` is owed to — see [`mail_audience`].
 pub async fn mail_audience_count(pool: &PgPool, kind: &str, after: Option<(&str, i32)>) -> anyhow::Result<i64> {
     let sql = audience_sql(after.is_some(), true);
-    let mut q = sqlx::query_scalar::<_, i64>(&sql).bind(kind);
+    let mut q = sqlx::query_scalar::<_, i64>(own_sql(sql)).bind(kind);
     if let Some((earlier, days)) = after {
         q = q.bind(earlier).bind(days);
     }
@@ -361,7 +368,7 @@ pub async fn mail_audience(
     limit: i64,
 ) -> anyhow::Result<Vec<Uuid>> {
     let sql = audience_sql(after.is_some(), false);
-    let mut q = sqlx::query_scalar::<_, Uuid>(&sql).bind(kind).bind(limit);
+    let mut q = sqlx::query_scalar::<_, Uuid>(own_sql(sql)).bind(kind).bind(limit);
     if let Some((earlier, days)) = after {
         q = q.bind(earlier).bind(days);
     }
@@ -990,10 +997,10 @@ pub async fn find_pending_identity(
     max_age: Duration,
 ) -> anyhow::Result<Option<PendingIdentity>> {
     let cutoff: DateTime<Utc> = Utc::now() - max_age;
-    Ok(sqlx::query_as::<_, PendingIdentity>(&format!(
+    Ok(sqlx::query_as::<_, PendingIdentity>(own_sql(format!(
         "SELECT {PENDING_FIELDS} FROM pending_identities \
          WHERE token_hash = $1 AND created_at > $2"
-    ))
+    )))
     .bind(token_hash)
     .bind(cutoff)
     .fetch_optional(pool)
@@ -1010,11 +1017,11 @@ pub async fn take_proven_pending(
     max_age: Duration,
 ) -> anyhow::Result<Option<PendingIdentity>> {
     let cutoff: DateTime<Utc> = Utc::now() - max_age;
-    Ok(sqlx::query_as::<_, PendingIdentity>(&format!(
+    Ok(sqlx::query_as::<_, PendingIdentity>(own_sql(format!(
         "DELETE FROM pending_identities \
          WHERE token_hash = $1 AND created_at > $2 AND email_proven \
          RETURNING {PENDING_FIELDS}"
-    ))
+    )))
     .bind(token_hash)
     .bind(cutoff)
     .fetch_optional(pool)
@@ -1055,11 +1062,11 @@ pub async fn consume_pending_code(
     max_attempts: i32,
 ) -> anyhow::Result<Option<PendingIdentity>> {
     let cutoff: DateTime<Utc> = Utc::now() - max_age;
-    Ok(sqlx::query_as::<_, PendingIdentity>(&format!(
+    Ok(sqlx::query_as::<_, PendingIdentity>(own_sql(format!(
         "DELETE FROM pending_identities \
          WHERE token_hash = $1 AND code = $2 AND code_sent_at > $3 AND attempts < $4 \
          AND email IS NOT NULL AND NOT email_proven RETURNING {PENDING_FIELDS}"
-    ))
+    )))
     .bind(token_hash)
     .bind(code)
     .bind(cutoff)

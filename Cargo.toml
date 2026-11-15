@@ -97,7 +97,7 @@ time = "0.3"
 schema_guard_tokio = "2.3"
 # The messages in six languages (locales/*.yml, src/i18n.rs): the API's error texts and the mail
 rust-i18n = "4"
-sha2 = "0.10"
+sha2 = "0.11"
 base64 = "0.23"
 reqwest = { version = "0.12", default-features = false, features = [
     "json",
