@@ -1,0 +1,220 @@
+# The messengers a build of signon can send to beyond its own five (feature `notify-templates`).
+#
+# This file is read when the crate is built, never when it runs: build.rs checks it and writes it
+# out as Rust, so a mistake here stops the build. A site that wants another set names its own
+# file at build time - SIGNON_NOTIFY_TEMPLATES=/path/to/file.toml, or in .cargo/config.toml:
+#     [env]
+#     SIGNON_NOTIFY_TEMPLATES = { value = "notify-templates.toml", relative = true }
+# That file is then the whole set, in place of this one.
+#
+# One table is one messenger. What a site gives at run time is only the template's `params` -
+# its address, its token - each as NOTIFY_<TEMPLATE>_<PARAM>; a template is in use when all of
+# them are set. Every param is treated as a secret.
+#
+#   params      what a site sets, in order
+#   url         where the request goes. A param at its very start is taken as it is (a whole
+#               address, or a server's base); anywhere else a value is percent-encoded
+#   method      POST (the default) or PUT
+#   headers     a table of header = value
+#   basic_auth  [user, password]
+#   json        the body as a table: any shape, sent as JSON           } one of the two
+#   form        the body as a table of field = value, sent as a form   }
+#   max_chars   the most characters of the text (default 3500): a longer one is cut to it, the
+#               "..." that says so within the count
+#   max_title   the most characters of the title, its level's word counted (default 200)
+#   max_link    the most characters of the link's address (default 1000): a longer link is left out
+#   levels      what {level} reads for info, warning and severe (default: those words)
+#   ok_field    for a service that answers 200 and says in its body whether it took the message:
+#   ok_value    the field of its JSON answer, and the value that means it did
+#
+# In any string, {name} is filled when a message is sent ({{ and }} are plain braces):
+#   {title}       the title, its level ahead of it ("WARNING: ", "SEVERE: ")
+#   {text}        the text
+#   {level}       the level, by `levels`
+#   {link_url}    the link's address, or nothing
+#   {link_label}  the link's label, or nothing
+#   {unique}      a new id for every message sent, 32 hex digits - for a field that must not repeat
+#   {<param>}     the site's value of that param
+#
+# Each template is written from its service's public documentation and tried against a receiver
+# of our own, not against the service: send one message through it before relying on it.
+
+# Discord takes 2000 characters in all
+[discord]
+params = ["webhook_url"]
+url = "{webhook_url}"
+max_title = 150
+max_chars = 1500
+max_link = 300
+[discord.json]
+content = "**{title}**\n{text}\n{link_url}"
+
+# Google Chat takes 4096 characters in all
+[google_chat]
+params = ["webhook_url"]
+url = "{webhook_url}"
+max_chars = 3000
+max_link = 500
+[google_chat.json]
+text = "*{title}*\n{text}\n{link_url}"
+
+[mattermost]
+params = ["webhook_url"]
+url = "{webhook_url}"
+[mattermost.json]
+text = "**{title}**\n{text}\n{link_url}"
+
+[rocket_chat]
+params = ["webhook_url"]
+url = "{webhook_url}"
+max_chars = 3000
+max_link = 500
+[rocket_chat.json]
+text = "*{title}*\n{text}\n{link_url}"
+
+# WeCom (WeChat Work) group bot: it answers 200 either way, with an errcode
+[wecom]
+params = ["key"]
+url = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key={key}"
+max_title = 100
+max_chars = 900
+max_link = 300
+ok_field = "errcode"
+ok_value = 0
+[wecom.json]
+msgtype = "markdown"
+[wecom.json.markdown]
+content = "**{title}**\n{text}\n{link_url}"
+
+# Lark / Feishu custom bot, without its signature check (keyword or address-list protection)
+[lark]
+params = ["webhook_url"]
+url = "{webhook_url}"
+ok_field = "code"
+ok_value = 0
+[lark.json]
+msg_type = "text"
+[lark.json.content]
+text = "{title}\n{text}\n{link_url}"
+
+# DingTalk custom robot, without its signature check (keyword or address-list protection)
+[dingtalk]
+params = ["access_token"]
+url = "https://oapi.dingtalk.com/robot/send?access_token={access_token}"
+ok_field = "errcode"
+ok_value = 0
+[dingtalk.json]
+msgtype = "text"
+[dingtalk.json.text]
+content = "{title}\n{text}\n{link_url}"
+
+[webex]
+params = ["token", "room"]
+url = "https://webexapis.com/v1/messages"
+max_title = 150
+max_chars = 1800
+max_link = 500
+[webex.headers]
+Authorization = "Bearer {token}"
+[webex.json]
+roomId = "{room}"
+markdown = "**{title}**\n{text}\n{link_url}"
+
+[pushover]
+params = ["token", "user"]
+url = "https://api.pushover.net/1/messages.json"
+max_chars = 1000
+levels = { info = "0", warning = "0", severe = "1" }
+[pushover.form]
+token = "{token}"
+user = "{user}"
+title = "{title}"
+message = "{text}"
+priority = "{level}"
+url = "{link_url}"
+url_title = "{link_label}"
+
+[pagerduty]
+params = ["routing_key"]
+url = "https://events.pagerduty.com/v2/enqueue"
+max_title = 120
+max_chars = 800
+levels = { info = "info", warning = "warning", severe = "critical" }
+[pagerduty.json]
+routing_key = "{routing_key}"
+event_action = "trigger"
+dedup_key = "{unique}"
+[pagerduty.json.payload]
+summary = "{title}: {text}"
+source = "signon"
+severity = "{level}"
+[pagerduty.json.payload.custom_details]
+link = "{link_url}"
+
+# Opsgenie takes 130 characters of message
+[opsgenie]
+params = ["api_key"]
+url = "https://api.opsgenie.com/v2/alerts"
+max_title = 125
+levels = { info = "P5", warning = "P3", severe = "P1" }
+[opsgenie.headers]
+Authorization = "GenieKey {api_key}"
+[opsgenie.json]
+message = "{title}"
+description = "{text}\n{link_url}"
+priority = "{level}"
+
+# ntfy, to a topic anyone may publish to; `server` is the server's address, such as https://ntfy.sh
+[ntfy]
+params = ["server", "topic"]
+url = "{server}"
+max_chars = 1200
+max_link = 300
+[ntfy.json]
+topic = "{topic}"
+title = "{title}"
+message = "{text}\n{link_url}"
+
+# ntfy, with an access token
+[ntfy_token]
+params = ["server", "topic", "token"]
+url = "{server}"
+max_chars = 1200
+max_link = 300
+[ntfy_token.headers]
+Authorization = "Bearer {token}"
+[ntfy_token.json]
+topic = "{topic}"
+title = "{title}"
+message = "{text}\n{link_url}"
+
+[gotify]
+params = ["server", "token"]
+url = "{server}/message"
+[gotify.headers]
+X-Gotify-Key = "{token}"
+[gotify.json]
+title = "{title}"
+message = "{text}\n{link_url}"
+priority = 5
+
+[zulip]
+params = ["site", "bot_email", "api_key", "stream", "topic"]
+url = "{site}/api/v1/messages"
+basic_auth = ["{bot_email}", "{api_key}"]
+[zulip.form]
+type = "stream"
+to = "{stream}"
+topic = "{topic}"
+content = "**{title}**\n{text}\n{link_url}"
+
+# Matrix: every message is put under an id of its own
+[matrix]
+params = ["homeserver", "token", "room"]
+url = "{homeserver}/_matrix/client/v3/rooms/{room}/send/m.room.message/{unique}"
+method = "PUT"
+[matrix.headers]
+Authorization = "Bearer {token}"
+[matrix.json]
+msgtype = "m.text"
+body = "{title}\n{text}\n{link_url}"

@@ -48,6 +48,10 @@ notify-telegram-incomplete: "каналу Telegram нужны токен бот�
 notify-no-mailer: "каналу электронной почты нужен mailer (Notifier::with_mailer)"
 notify-no-client: "нет HTTP-клиента: %{why}"
 notify-not-finished: "отправка не завершилась"
+notify-template-unknown: "шаблона %{name} нет в этой сборке"
+notify-template-param: "шаблону %{name} нужен параметр %{param}"
+notify-template-not-one: "у шаблона %{name} нет параметра %{param}, или он задан дважды"
+notify-header: "заголовок %{name} нельзя отправить в таком виде"
 
 # === mail: the confirmation of a new account (src/email.rs Templates::verify) ===
 mail-verify-subject: "Подтвердите учётную запись %{product}"

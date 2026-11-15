@@ -36,6 +36,9 @@ use serde_json::{json, Value};
 
 use crate::Mailer;
 
+#[cfg(feature = "notify-templates")]
+pub mod template;
+
 /// The most characters of a message's text a channel is sent: the rest is cut, with `...` in its place.
 /// Telegram takes 4096 characters a message; this leaves room for the title and the link.
 pub const MAX_TEXT: usize = 3500;
@@ -168,6 +171,11 @@ pub enum Channel {
     Webhook { url: String, bearer: Option<String> },
     /// A mail through the notifier's [`Mailer`]
     Email { to: String },
+    /// A messenger this build has a template for (feature `notify-templates`, [`template`]): the
+    /// template's name, and the site's value of each of its params - `(param, value)`. Every
+    /// value is held as a secret. [`Channel::template`] makes one.
+    #[cfg(feature = "notify-templates")]
+    Template { name: String, params: Vec<(String, String)> },
 }
 
 impl Channel {
@@ -179,7 +187,17 @@ impl Channel {
             Channel::Telegram { .. } => "telegram",
             Channel::Webhook { .. } => "webhook",
             Channel::Email { .. } => "email",
+            // the template's own name; one this build does not have is still named as what it is
+            #[cfg(feature = "notify-templates")]
+            Channel::Template { name, .. } => template::find(name).map(|t| t.name).unwrap_or("template"),
         }
+    }
+
+    /// A channel of the template `name` with the site's `params`, `(param, value)` each. Whether the
+    /// build has that template, and the site gave all it asks for, is told when a message is sent.
+    #[cfg(feature = "notify-templates")]
+    pub fn template(name: impl Into<String>, params: &[(&str, &str)]) -> Channel {
+        Channel::Template { name: name.into(), params: params.iter().map(|(p, v)| (p.to_string(), v.to_string())).collect() }
     }
 
     /// The channel as a log line and a [`Delivery`] name it: its kind, and what of its address is no secret
@@ -188,6 +206,8 @@ impl Channel {
     pub fn label(&self) -> String {
         match self {
             Channel::Slack { .. } | Channel::Teams { .. } | Channel::Webhook { .. } => self.kind().to_string(),
+            #[cfg(feature = "notify-templates")]
+            Channel::Template { .. } => self.kind().to_string(),
             Channel::Telegram { chat_id, .. } => format!("telegram chat {chat_id}"),
             Channel::Email { to } => format!("email {to}"),
         }
@@ -215,6 +235,19 @@ impl Channel {
                 out
             }
             Channel::Email { .. } => Vec::new(),
+            // every param: an address with its parts, anything else as it is - and as it reads
+            // percent-encoded, which is how it goes into an address [review 2026-11-15]
+            #[cfg(feature = "notify-templates")]
+            Channel::Template { params, .. } => params.iter()
+                .flat_map(|(_, value)| {
+                    let mut out = if value.contains("://") { of_url(value) } else { vec![value.clone()] };
+                    let encoded = urlencoding::encode(value).into_owned();
+                    if &encoded != value {
+                        out.push(encoded);
+                    }
+                    out
+                })
+                .collect(),
         };
         let decoded: Vec<String> = out.iter().map(|s| percent_decoded(s)).filter(|d| !out.contains(d)).collect();
         out.extend(decoded);
@@ -365,6 +398,8 @@ impl Notifier {
     /// - `NOTIFY_TELEGRAM_TOKEN` and `NOTIFY_TELEGRAM_CHAT` - a bot's token, and its chats, comma separated
     /// - `NOTIFY_WEBHOOK_URL`, with `NOTIFY_WEBHOOK_BEARER` when the receiver wants a token
     /// - `NOTIFY_EMAIL_TO` - mail addresses, comma separated (sent once a mailer is attached)
+    /// - with feature `notify-templates`, `NOTIFY_<TEMPLATE>_<PARAM>` for each param of a template
+    ///   this build has ([`template::all`]): a template is in use when all of its params are set
     pub fn from_env() -> Self {
         Self::from_vars(|name| std::env::var(name).ok())
     }
@@ -393,6 +428,15 @@ impl Notifier {
         }
         for to in list("NOTIFY_EMAIL_TO") {
             channels.push(Channel::Email { to });
+        }
+        #[cfg(feature = "notify-templates")]
+        for t in template::all() {
+            let params: Option<Vec<(String, String)>> = t.params.iter()
+                .map(|p| set(&format!("NOTIFY_{}_{}", t.name.to_uppercase(), p.to_uppercase())).map(|v| (p.to_string(), v)))
+                .collect();
+            if let Some(params) = params {
+                channels.push(Channel::Template { name: t.name.to_string(), params });
+            }
         }
         Self::new(channels)
     }
@@ -508,6 +552,31 @@ impl Notifier {
                 let (subject, text, html) = email_parts(message);
                 mailer.deliver(to, &subject, text, html, &[]).await.map_err(NotifyError::Mail)
             }
+            #[cfg(feature = "notify-templates")]
+            Channel::Template { name, params } => {
+                let t = template::find(name)
+                    .ok_or_else(|| NotifyError::Config(crate::i18n::text("notify-template-unknown", &[("name", name)])))?;
+                let request = t.request(params, message).map_err(|e| {
+                    let (key, param) = match &e {
+                        template::NotMade::Missing(param) => ("notify-template-param", param),
+                        template::NotMade::NotOne(param) => ("notify-template-not-one", param),
+                    };
+                    NotifyError::Config(crate::i18n::text(key, &[("name", t.name), ("param", param)]))
+                })?;
+                let body = match &request.body {
+                    template::Payload::Json(json) => CallBody::Json(json),
+                    template::Payload::Form(fields) => CallBody::Form(fields),
+                };
+                self.call(&Call {
+                    put: request.method == template::Method::Put,
+                    url: &request.url,
+                    bearer: None,
+                    headers: &request.headers,
+                    basic_auth: request.basic_auth.as_ref(),
+                    body,
+                    ok: request.ok,
+                }, &secrets).await
+            }
         }
     }
 
@@ -521,23 +590,62 @@ impl Notifier {
         }
     }
 
-    /// One POST of `body` as JSON. A 2xx is delivered. A 429 is waited out once, for the time the service
+    /// One POST of `body` as JSON, with `bearer` as its Authorization when there is one
+    async fn post(&self, url: &str, bearer: Option<&str>, body: &Value, secrets: &[String]) -> Result<(), NotifyError> {
+        self.call(&Call { put: false, url, bearer, headers: &[], basic_auth: None, body: CallBody::Json(body), ok: None }, secrets).await
+    }
+
+    /// One request. A 2xx is delivered - where the channel names a field of the answer that says so
+    /// (`ok`), only with that field at its value. A 429 is waited out once, for the time the service
     /// names, when that is within `max_wait`. Anything else is the error, with the service's reason
     /// scrubbed of `secrets`.
-    async fn post(&self, url: &str, bearer: Option<&str>, body: &Value, secrets: &[String]) -> Result<(), NotifyError> {
-        let url = self.checked(url)?;
+    async fn call(&self, call: &Call<'_>, secrets: &[String]) -> Result<(), NotifyError> {
+        let url = self.checked(call.url)?;
         let http = self.inner.http.as_ref().map_err(|e| NotifyError::Config(crate::i18n::text("notify-no-client", &[("why", e)])))?;
+        // a header that cannot be sent is the channel's set-up, said before anything goes out
+        let mut headers = reqwest::header::HeaderMap::new();
+        for (name, value) in call.headers {
+            let unsendable = || NotifyError::Config(crate::i18n::text("notify-header", &[("name", name)]));
+            let header = reqwest::header::HeaderName::from_bytes(name.as_bytes()).map_err(|_| unsendable())?;
+            let mut value = reqwest::header::HeaderValue::from_str(value).map_err(|_| unsendable())?;
+            value.set_sensitive(true);
+            headers.insert(header, value);
+        }
         let mut waited = false;
         loop {
-            let mut request = http.post(url.clone()).json(body);
-            if let Some(token) = bearer {
+            let mut request = if call.put { http.put(url.clone()) } else { http.post(url.clone()) };
+            request = match call.body {
+                CallBody::Json(body) => request.json(body),
+                CallBody::Form(fields) => request.form(fields),
+            };
+            request = request.headers(headers.clone());
+            if let Some(token) = call.bearer {
                 request = request.bearer_auth(token);
+            }
+            if let Some((user, password)) = call.basic_auth {
+                request = request.basic_auth(user, Some(password));
             }
             let response = request.send().await
                 .map_err(|e| NotifyError::Unreachable(scrub(&e.without_url().to_string(), secrets)))?;
             let status = response.status();
             if status.is_success() {
-                return Ok(());
+                let Some((field, taken)) = call.ok else { return Ok(()) };
+                // a service that answers 200 either way: its body says whether it took the message.
+                // [review 2026-11-15] The answer is read as it came - scrubbing first could change the
+                // very field - and a number is compared as a number: 0.0 is 0.
+                let text = response.text().await.unwrap_or_default();
+                let said = serde_json::from_str::<Value>(&text).ok().and_then(|json| json.get(field).cloned());
+                let is_taken = match &said {
+                    Some(Value::String(s)) => s == taken,
+                    Some(Value::Number(n)) => taken.parse::<f64>().is_ok_and(|want| n.as_f64() == Some(want)),
+                    Some(Value::Bool(b)) => taken == b.to_string(),
+                    _ => false,
+                };
+                return if is_taken {
+                    Ok(())
+                } else {
+                    Err(NotifyError::Refused { status: status.as_u16(), reason: reason_of(&scrub(&text, secrets)).0 })
+                };
             }
             let header = response.headers().get(reqwest::header::RETRY_AFTER).and_then(|v| v.to_str().ok()).map(str::to_string);
             // [review 2026-11-14] scrubbed whole, before it is cut to a reason: a secret across the cut would
@@ -565,6 +673,26 @@ impl Notifier {
     }
 }
 
+/// One request as a channel makes it: a POST of JSON for the crate's own channels, and whatever its
+/// template says for a templated one
+struct Call<'a> {
+    /// a PUT; a POST otherwise
+    put: bool,
+    url: &'a str,
+    bearer: Option<&'a str>,
+    headers: &'a [(String, String)],
+    basic_auth: Option<&'a (String, String)>,
+    body: CallBody<'a>,
+    /// a field of the JSON answer and the value that says the message was taken
+    ok: Option<(&'a str, &'a str)>,
+}
+
+#[cfg_attr(not(feature = "notify-templates"), allow(dead_code))] // a form is a template's
+enum CallBody<'a> {
+    Json(&'a Value),
+    Form(&'a [(String, String)]),
+}
+
 /// [review 2026-11-14] The seconds a `Retry-After` header asks for: a count of seconds (a fraction rounds
 /// up), or an HTTP date, read from `now`; a date already past is no wait. Anything else is not known.
 fn retry_after(value: &str, now: chrono::DateTime<chrono::Utc>) -> Option<u64> {
@@ -580,14 +708,17 @@ fn retry_after(value: &str, now: chrono::DateTime<chrono::Utc>) -> Option<u64> {
 }
 
 /// The reason in a service's error answer, in one short line, and the wait it names in its body (Telegram's
-/// `parameters.retry_after`). A JSON answer gives its `description`, `error` or `message`.
+/// `parameters.retry_after`; a `retry_after` of its own, in seconds, as Discord's). A JSON answer gives its
+/// `description`, `error`, `message`, `errmsg` or `msg` - or the `message` of an `error` that is an object.
 fn reason_of(body: &str) -> (String, Option<u64>) {
     let short = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(200).collect::<String>();
     match serde_json::from_str::<Value>(body) {
         Ok(json) => {
-            let wait = json.pointer("/parameters/retry_after").and_then(Value::as_u64);
-            let reason = ["description", "error", "message"].iter()
+            let wait = json.pointer("/parameters/retry_after").and_then(Value::as_u64)
+                .or_else(|| json.get("retry_after").and_then(Value::as_f64).filter(|s| s.is_finite() && *s >= 0.0).map(|s| s.ceil() as u64));
+            let reason = ["description", "error", "message", "errmsg", "msg"].iter()
                 .find_map(|k| json.get(k).and_then(Value::as_str))
+                .or_else(|| json.pointer("/error/message").and_then(Value::as_str))
                 .map(short)
                 .unwrap_or_else(|| short(body));
             (reason, wait)
@@ -1137,5 +1268,348 @@ mod tests {
         assert_eq!(scrub("at /a/long-secret and long-secret-2", &["long-secret".into(), "long-secret-2".into(), "at".into()]),
             "at /a/*** and ***", "the longer secret first; a short word is left");
         assert_eq!(scrub("a tok3 b", &["tok3".into()]), "a *** b", "four characters are scrubbed");
+    }
+}
+
+/// [notify-templates] The build's own reader of the template file, included here to be tested
+#[cfg(all(test, feature = "notify-templates"))]
+#[path = "../build/notify_templates.rs"]
+mod template_build;
+
+#[cfg(all(test, feature = "notify-templates"))]
+mod template_tests {
+    use super::*;
+    use axum::http::{HeaderMap, Method, StatusCode, Uri};
+    use std::sync::Mutex;
+
+    /// what the receiver got: the method, the path with its query, the headers, the body as text
+    type Got = Arc<Mutex<Vec<(String, String, HeaderMap, String)>>>;
+
+    /// A receiver of anything, on a port of its own. It takes every request; one under `/refusing`
+    /// it answers 200 with an error in the body, as WeCom and Lark do; one under `/echo` it refuses,
+    /// repeating the address and the Authorization it was asked with, as an error page does.
+    async fn receiver() -> (String, Got) {
+        let got: Got = Arc::new(Mutex::new(Vec::new()));
+        let seen = got.clone();
+        let app = axum::Router::new().fallback(move |method: Method, uri: Uri, headers: HeaderMap, body: String| {
+            let seen = seen.clone();
+            async move {
+                let path = uri.path_and_query().map(|p| p.as_str().to_string()).unwrap_or_default();
+                let auth = headers.get("authorization").and_then(|v| v.to_str().ok()).unwrap_or_default().to_string();
+                seen.lock().unwrap().push((method.to_string(), path.clone(), headers, body));
+                if path.starts_with("/refusing") {
+                    (StatusCode::OK, r#"{"code": 19024, "msg": "Key Words Not Found"}"#.to_string())
+                } else if path.starts_with("/echo") {
+                    (StatusCode::FORBIDDEN, format!("no entry at {path} for {auth}"))
+                } else {
+                    (StatusCode::OK, r#"{"code": 0, "msg": "success"}"#.to_string())
+                }
+            }
+        });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        (base, got)
+    }
+
+    fn notifier(channels: Vec<Channel>) -> Notifier {
+        Notifier::new(channels).allow_http(true)
+    }
+
+    fn message() -> Message {
+        Message::new("Disk <almost> full", "node-2 & \"node-3\":\n91% of C:\\var used")
+            .level(Level::Warning)
+            .link("Open the node", "https://panel.example/n/2")
+    }
+
+    /// A template's request is the file's, filled: the address with the site's own at its start, a
+    /// header, a JSON body whose text is the message's whatever characters it holds, a number as a
+    /// number; the level by the template's own words; nothing where the message has no link.
+    #[tokio::test]
+    async fn a_template_is_filled_into_its_request() {
+        let (base, got) = receiver().await;
+        let discord = Channel::template("discord", &[("webhook_url", &format!("{base}/api/webhooks/77/disc-secret-signature"))]);
+        let gotify = Channel::template("gotify", &[("server", &format!("{base}/")), ("token", "gotify-app-token")]);
+        let pushover_like = Channel::template("gotify", &[("server", &base), ("token", "second-token")]);
+        let sent = notifier(vec![discord, gotify]).send(&message()).await;
+        assert!(sent.iter().all(|d| d.result.is_ok()), "{sent:?}");
+        assert_eq!(sent.iter().map(|d| d.channel.as_str()).collect::<Vec<_>>(), ["discord", "gotify"], "a channel is named by its template alone");
+
+        let got_now = got.lock().unwrap().clone();
+        let of = |path: &str| got_now.iter().find(|(_, p, _, _)| p == path).unwrap_or_else(|| panic!("nothing at {path}: {got_now:?}")).clone();
+        let (method, _, headers, body) = of("/api/webhooks/77/disc-secret-signature");
+        assert_eq!(method, "POST");
+        assert_eq!(headers.get("content-type").unwrap(), "application/json");
+        assert_eq!(serde_json::from_str::<Value>(&body).unwrap(), json!({
+            "content": "**WARNING: Disk <almost> full**\nnode-2 & \"node-3\":\n91% of C:\\var used\nhttps://panel.example/n/2"
+        }));
+        // the server's address without its last slash, the path after it; the key in its header
+        let (_, _, headers, body) = of("/message");
+        assert_eq!(headers.get("x-gotify-key").unwrap(), "gotify-app-token");
+        assert_eq!(serde_json::from_str::<Value>(&body).unwrap(), json!({
+            "title": "WARNING: Disk <almost> full",
+            "message": "node-2 & \"node-3\":\n91% of C:\\var used\nhttps://panel.example/n/2",
+            "priority": 5
+        }));
+
+        // no link: nothing in its place; and the level in the template's own words
+        let t = template::find("pagerduty").unwrap();
+        let request = t.request(&[("routing_key".into(), "rk".into())], &Message::new("t", "x").level(Level::Severe)).unwrap();
+        let template::Payload::Json(body) = request.body else { panic!("a JSON body") };
+        assert_eq!(body["payload"]["severity"], "critical");
+        assert_eq!(body["payload"]["summary"], "SEVERE: t: x");
+        assert_eq!(body["payload"]["custom_details"]["link"], "");
+        assert_eq!(body["event_action"], "trigger");
+        drop(pushover_like);
+    }
+
+    /// A form with basic auth (Zulip), a PUT under an id of its own (Matrix): the id is new for every
+    /// message, and a value in an address is one part of it, whatever it holds.
+    #[tokio::test]
+    async fn a_form_basic_auth_a_put_and_the_unique_keyword() {
+        use base64::Engine;
+        let (base, got) = receiver().await;
+        let zulip = Channel::template("zulip", &[("site", &base), ("bot_email", "bot@zulip.example"), ("api_key", "zulip-api-key-secret"),
+            ("stream", "ops & alerts"), ("topic", "disks")]);
+        let matrix = Channel::template("matrix", &[("homeserver", &base), ("token", "matrix-access-token"), ("room", "!room/id?x=1:example.org")]);
+        let n = notifier(vec![zulip, matrix]);
+        for _ in 0..2 {
+            let sent = n.send(&message()).await;
+            assert!(sent.iter().all(|d| d.result.is_ok()), "{sent:?}");
+        }
+        let got = got.lock().unwrap().clone();
+        let (method, _, headers, body) = got.iter().find(|(_, p, _, _)| p == "/api/v1/messages").unwrap().clone();
+        assert_eq!(method, "POST");
+        assert_eq!(headers.get("content-type").unwrap(), "application/x-www-form-urlencoded");
+        let basic = base64::engine::general_purpose::STANDARD.encode("bot@zulip.example:zulip-api-key-secret");
+        assert_eq!(headers.get("authorization").unwrap().to_str().unwrap(), format!("Basic {basic}"));
+        let form: std::collections::HashMap<String, String> = body.split('&').map(|pair| {
+            let (k, v) = pair.split_once('=').unwrap();
+            (k.to_string(), urlencoding::decode(&v.replace('+', " ")).unwrap().into_owned())
+        }).collect();
+        assert_eq!(form["type"], "stream");
+        assert_eq!(form["to"], "ops & alerts");
+        assert_eq!(form["topic"], "disks");
+        assert_eq!(form["content"], "**WARNING: Disk <almost> full**\nnode-2 & \"node-3\":\n91% of C:\\var used\nhttps://panel.example/n/2");
+
+        let puts: Vec<&(String, String, HeaderMap, String)> = got.iter().filter(|(m, _, _, _)| m == "PUT").collect();
+        assert_eq!(puts.len(), 2);
+        let prefix = "/_matrix/client/v3/rooms/%21room%2Fid%3Fx%3D1%3Aexample.org/send/m.room.message/";
+        let ids: Vec<&str> = puts.iter().map(|(_, path, _, _)| path.strip_prefix(prefix).unwrap_or_else(|| panic!("{path}"))).collect();
+        assert!(ids.iter().all(|id| id.len() == 32 && id.chars().all(|c| c.is_ascii_hexdigit())), "{ids:?}");
+        assert_ne!(ids[0], ids[1], "a new id for every message");
+        assert_eq!(puts[0].2.get("authorization").unwrap(), "Bearer matrix-access-token");
+        assert_eq!(serde_json::from_str::<Value>(&puts[0].3).unwrap()["msgtype"], "m.text");
+    }
+
+    /// A service that answers 200 either way is believed by its body; a text longer than the
+    /// template takes is cut; a template the build does not have, or one a param is missing for,
+    /// is the channel's set-up - said, and nothing sent.
+    #[tokio::test]
+    async fn the_answer_is_read_the_text_is_cut_and_a_wrong_set_up_is_said() {
+        let (base, got) = receiver().await;
+        let n = notifier(vec![]);
+        let refused = n.send_to(&Channel::template("lark", &[("webhook_url", &format!("{base}/refusing/hook"))]), &message()).await;
+        assert_eq!(refused, Err(NotifyError::Refused { status: 200, reason: "Key Words Not Found".into() }));
+        assert_eq!(n.send_to(&Channel::template("lark", &[("webhook_url", &format!("{base}/taking/hook"))]), &message()).await, Ok(()));
+
+        let long = Message::new("t", "ж".repeat(3000));
+        n.send_to(&Channel::template("discord", &[("webhook_url", &format!("{base}/long"))]), &long).await.unwrap();
+        let body = got.lock().unwrap().iter().find(|(_, p, _, _)| p == "/long").unwrap().3.clone();
+        let content = serde_json::from_str::<Value>(&body).unwrap()["content"].as_str().unwrap().to_string();
+        // [review 2026-11-15] the template's own limit, the "..." within it
+        assert_eq!(content.chars().filter(|c| *c == 'ж').count(), 1497);
+        assert!(content.ends_with("...\n"), "the text, cut, and no link after it");
+
+        let before = got.lock().unwrap().len();
+        let e = n.send_to(&Channel::template("gotify", &[("server", &base)]), &message()).await.unwrap_err();
+        assert!(matches!(&e, NotifyError::Config(why) if why.contains("gotify") && why.contains("token")), "{e:?}");
+        // [review 2026-11-15] a param the template has not - a name mistyped - and one given twice
+        let e = n.send_to(&Channel::template("gotify", &[("server", &base), ("token", "t"), ("tokn", "t")]), &message()).await.unwrap_err();
+        assert!(matches!(&e, NotifyError::Config(why) if why.contains("gotify") && why.contains("tokn")), "{e:?}");
+        let e = n.send_to(&Channel::template("gotify", &[("server", &base), ("token", "one"), ("token", "two")]), &message()).await.unwrap_err();
+        assert!(matches!(&e, NotifyError::Config(why) if why.contains("token")), "{e:?}");
+        let e = n.send_to(&Channel::template("no_such_messenger", &[("x", "y")]), &message()).await.unwrap_err();
+        assert!(matches!(&e, NotifyError::Config(why) if why.contains("no_such_messenger")), "{e:?}");
+        assert_eq!(e.code(), "SO-E040");
+        // a header's value with a line break in it cannot be sent: said, not sent
+        let e = n.send_to(&Channel::template("gotify", &[("server", &base), ("token", "two\nlines")]), &message()).await.unwrap_err();
+        assert!(matches!(&e, NotifyError::Config(why) if why.contains("X-Gotify-Key")), "{e:?}");
+        assert_eq!(got.lock().unwrap().len(), before, "nothing was sent");
+    }
+
+    /// Every param is a secret: none is in a label, a debug text or an error, though the service
+    /// repeats the address and the token it was asked with.
+    #[tokio::test]
+    async fn a_templates_params_are_never_shown() {
+        let (base, _) = receiver().await;
+        let webex_like = Channel::template("ntfy_token", &[("server", &format!("{base}/echo/topic-server-secret-path")), ("topic", "alerts-topic-secret"),
+            ("token", "tk_ntfy-access-token-secret")]);
+        assert_eq!(webex_like.label(), "ntfy_token");
+        assert_eq!(format!("{webex_like:?}"), "Channel(ntfy_token)");
+        let e = notifier(vec![]).send_to(&webex_like, &message()).await.unwrap_err();
+        let NotifyError::Refused { status: 403, reason } = &e else { panic!("{e:?}") };
+        for secret in ["topic-server-secret-path", "tk_ntfy-access-token-secret"] {
+            assert!(!reason.contains(secret) && !e.to_string().contains(secret), "{secret} in {reason}");
+        }
+        assert!(reason.contains("***"), "{reason}");
+    }
+
+    /// [review 2026-11-15] A template's limits are its service's, and hold to the character: the
+    /// longest message there can be - a long title at its loudest level, a long text of wide
+    /// characters, a link as long as the template lets through - is within what each service takes;
+    /// a link longer than the template's limit is left out.
+    #[test]
+    fn the_longest_message_is_within_each_services_limit() {
+        let body_of = |name: &str, link_chars: usize| -> Value {
+            let t = template::find(name).unwrap();
+            let params: Vec<(String, String)> = t.params.iter().map(|p| (p.to_string(), "https://x.example/p".to_string())).collect();
+            let link = format!("https://l.example/{}", "a".repeat(link_chars - 18));
+            let message = Message::new("災".repeat(400), "字".repeat(9000)).level(Level::Warning).link("open", link);
+            match t.request(&params, &message).unwrap().body {
+                template::Payload::Json(json) => json,
+                template::Payload::Form(fields) => Value::Object(fields.into_iter().map(|(k, v)| (k, Value::String(v))).collect()),
+            }
+        };
+        let chars = |v: &Value| v.as_str().unwrap().chars().count();
+        let bytes = |v: &Value| v.as_str().unwrap().len();
+        assert!(chars(&body_of("discord", 300)["content"]) <= 2000, "{}", chars(&body_of("discord", 300)["content"]));
+        assert!(body_of("discord", 300)["content"].as_str().unwrap().contains("https://l.example/"));
+        assert!(!body_of("discord", 301)["content"].as_str().unwrap().contains("https://l.example/"), "a longer link is left out");
+        assert!(chars(&body_of("google_chat", 500)["text"]) <= 4096);
+        assert!(chars(&body_of("opsgenie", 1000)["message"]) <= 130, "{}", chars(&body_of("opsgenie", 1000)["message"]));
+        assert!(chars(&body_of("pushover", 1000)["message"]) <= 1024);
+        assert!(chars(&body_of("pagerduty", 1000)["payload"]["summary"]) <= 1024);
+        assert!(bytes(&body_of("wecom", 300)["markdown"]["content"]) <= 4096, "{}", bytes(&body_of("wecom", 300)["markdown"]["content"]));
+        assert!(bytes(&body_of("webex", 500)["markdown"]) <= 7439, "{}", bytes(&body_of("webex", 500)["markdown"]));
+        assert!(bytes(&body_of("ntfy", 300)["message"]) <= 4096);
+        // the title's limit counts its level's word, and the cut's own three dots
+        let title = body_of("opsgenie", 100)["message"].as_str().unwrap().to_string();
+        assert!(title.starts_with("WARNING: 災") && title.ends_with("...") && title.chars().count() == 125, "{title}");
+    }
+
+    /// [review 2026-11-15] An answer's number is compared as a number; and a param is a secret as it
+    /// reads in an address too, percent-encoded
+    #[tokio::test]
+    async fn a_number_is_a_number_and_an_encoded_param_is_a_secret() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let app = axum::Router::new().fallback(|uri: Uri| async move {
+            match uri.path() {
+                "/float" => (StatusCode::OK, r#"{"code": 0.0}"#.to_string()),
+                "/string" => (StatusCode::OK, r#"{"code": "0"}"#.to_string()),
+                "/other" => (StatusCode::OK, r#"{"code": 7, "msg": "no"}"#.to_string()),
+                "/none" => (StatusCode::OK, "taken".to_string()),
+                path => (StatusCode::NOT_FOUND, format!("no room at {path}")),
+            }
+        });
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let n = notifier(vec![]);
+        let lark = |path: &str| Channel::template("lark", &[("webhook_url", &format!("{base}{path}"))]);
+        assert_eq!(n.send_to(&lark("/float"), &message()).await, Ok(()));
+        assert_eq!(n.send_to(&lark("/string"), &message()).await, Ok(()));
+        assert_eq!(n.send_to(&lark("/other"), &message()).await, Err(NotifyError::Refused { status: 200, reason: "no".into() }));
+        assert!(matches!(n.send_to(&lark("/none"), &message()).await, Err(NotifyError::Refused { status: 200, .. })), "an answer that does not say");
+
+        let matrix = Channel::template("matrix", &[("homeserver", &base), ("token", "matrix-token"), ("room", "!secretroom:example.org")]);
+        let e = n.send_to(&matrix, &message()).await.unwrap_err();
+        let NotifyError::Refused { status: 404, reason } = &e else { panic!("{e:?}") };
+        assert!(!reason.contains("secretroom") && reason.contains("***"), "{reason}");
+    }
+
+    /// From the environment a template is in use when every one of its params is set, and its
+    /// channel is after the crate's own
+    #[test]
+    fn a_template_is_used_when_all_its_params_are_set() {
+        let vars = |pairs: &'static [(&'static str, &'static str)]| move |name: &str| pairs.iter().find(|(n, _)| *n == name).map(|(_, v)| v.to_string());
+        let n = Notifier::from_vars(vars(&[("NOTIFY_SLACK_WEBHOOK", "https://hooks.slack.example/x"),
+            ("NOTIFY_GOTIFY_SERVER", "https://push.example"), ("NOTIFY_GOTIFY_TOKEN", " app-token "),
+            ("NOTIFY_ZULIP_SITE", "https://zulip.example"), ("NOTIFY_ZULIP_API_KEY", "only two of five"),
+            ("NOTIFY_DISCORD_WEBHOOK_URL", "  ")]));
+        assert_eq!(n.channels().iter().map(Channel::kind).collect::<Vec<_>>(), ["slack", "gotify"]);
+        assert_eq!(n.channels()[1], Channel::template("gotify", &[("server", "https://push.example"), ("token", "app-token")]));
+        assert!(Notifier::from_vars(|_| None).is_empty());
+    }
+
+    /// Every template of this build makes a request with all its params given: an address a
+    /// request can go to, no name left unfilled anywhere, and its params all in use.
+    #[test]
+    fn every_template_of_the_build_makes_a_whole_request() {
+        assert!(template::all().len() >= 16, "the crate's own file has sixteen");
+        for t in template::all() {
+            let params: Vec<(String, String)> = t.params.iter().map(|p| {
+                let address = ["webhook_url", "server", "site", "homeserver"].contains(p);
+                (p.to_string(), if address { format!("https://{p}.example/base") } else { format!("value-of-{p}") })
+            }).collect();
+            let request = t.request(&params, &message()).unwrap_or_else(|e| panic!("{}: {e:?}", t.name));
+            let url = reqwest::Url::parse(&request.url).unwrap_or_else(|e| panic!("{}: {} is no address: {e}", t.name, request.url));
+            assert_eq!(url.scheme(), "https", "{}", t.name);
+            let mut texts: Vec<String> = request.headers.iter().map(|(_, v)| v.clone()).collect();
+            texts.push(request.url.clone());
+            texts.push(match &request.body {
+                template::Payload::Json(json) => json.to_string(),
+                template::Payload::Form(fields) => fields.iter().map(|(_, v)| v.as_str()).collect::<Vec<_>>().join(" "),
+            });
+            texts.extend(request.basic_auth.iter().flat_map(|(u, p)| [u.clone(), p.clone()]));
+            let all = texts.join(" ");
+            for name in template_build::KEYWORDS.iter().copied().chain(t.params.iter().copied()) {
+                assert!(!all.contains(&format!("{{{name}}}")), "{}: {{{name}}} is left unfilled", t.name);
+            }
+            for (param, value) in &params {
+                let value = value.trim_start_matches("https://");
+                assert!(all.contains(value) || all.contains(urlencoding::encode(value).as_ref()), "{}: {param} is used nowhere", t.name);
+            }
+            // a missing param is named
+            assert_eq!(t.request(&params[1..], &message()).err(), Some(template::NotMade::Missing(t.params[0].to_string())), "{}", t.name);
+        }
+    }
+
+    /// The build's reader: the crate's own file is read whole; a file that is wrong is refused
+    /// with the template and what is wrong with it - at build time, where it stops the build.
+    #[test]
+    fn the_build_reads_the_file_and_refuses_a_wrong_one() {
+        let own = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/notify-templates.toml")).unwrap();
+        let rust = template_build::generate(&own).expect("the crate's own file");
+        assert_eq!(rust.matches("    Template { name: ").count(), 16);
+        assert!(rust.starts_with("pub static TEMPLATES: &[Template] = &[\n") && rust.ends_with("];\n"));
+
+        let ok = "[chat]\nparams = [\"hook\"]\nurl = \"{hook}\"\n[chat.json]\ntext = \"{title} {{as it is}} {unique}\"\nn = 3\nflag = true\nlist = [\"{text}\", 1.5]\n";
+        let rust = template_build::generate(ok).unwrap();
+        assert!(rust.contains(r#"J::Str("{title} {{as it is}} {unique}")"#) && rust.contains(r#"J::Num("3")"#) && rust.contains("J::Bool(true)")
+            && rust.contains(r#"J::Arr(&[J::Str("{text}"), J::Num("1.5")])"#), "{rust}");
+        assert_eq!(template_build::names("a {title} {{b}} {x_1}").unwrap(), ["title", "x_1"]);
+
+        let wrong = |change: &dyn Fn(&str) -> String, why: &str| {
+            let e = template_build::generate(&change(ok)).expect_err(why);
+            assert!(e.contains(why), "{e} (wanted: {why})");
+        };
+        wrong(&|f| f.replace("{title}", "{tittle}"), "{tittle} is no keyword");
+        wrong(&|f| f.replace("url = \"{hook}\"", "url = \"ftp://x/{hook}\""), "url starts with https://");
+        wrong(&|f| f.replace("url = \"{hook}\"", "url = \"https://x.example/\""), "the param hook is used nowhere");
+        wrong(&|f| f.replace("params = [\"hook\"]", "params = [\"hook\", \"text\"]"), "the param text has a keyword's name");
+        wrong(&|f| f.replace("params = [\"hook\"]", "params = [\"hook\", \"hook\"]"), "the param hook is there twice");
+        wrong(&|f| f.replace("params = [\"hook\"]", "params = []"), "params is a list of one to eight names");
+        wrong(&|f| f.replace("[chat]", "[chat]\nmethod = \"DELETE\""), "method is POST or PUT");
+        wrong(&|f| f.replace("[chat]", "[chat]\ntimeout = 3"), "timeout is no key of a template");
+        wrong(&|f| f.replace("[chat]", "[chat]\nok_field = \"code\""), "ok_field and ok_value go together");
+        wrong(&|f| f.replace("[chat]", "[chat]\nmax_chars = 0"), "max_chars is a number from 1 to 100000");
+        wrong(&|f| f.replace("[chat]", "[chat]\nlevels = { urgent = \"1\" }"), "urgent is no level");
+        // [review 2026-11-15] a level is a plain word; two params are not read from one setting; a
+        // number stays as it was written
+        wrong(&|f| f.replace("[chat]", "[chat]\nlevels = { info = \"{title}\" }"), "the level info is a plain word");
+        wrong(&|f| f.replace("[chat]", "[chat]\nmax_link = 2000"), "max_link is a number from 1 to 1000");
+        wrong(&|f| format!("{f}\n[chat_x]\nparams = [\"y\"]\nurl = \"{{y}}\"\n[chat_x.json]\na = 1\n[chat_x_y]\nparams = [\"z\"]\nurl = \"{{z}}\"\n[chat_x_y.json]\na = 1\n\
+            [chat_x_y2]\nparams = [\"q\"]\nurl = \"{{q}}\"\n[chat_x_y2.json]\na = 1\n").replace("[chat_x]\nparams = [\"y\"]\nurl = \"{y}\"", "[chat_x]\nparams = [\"y_z\"]\nurl = \"{y_z}\""),
+            "is read from NOTIFY_CHAT_X_Y_Z, as is");
+        assert!(template_build::generate(&ok.replace("n = 3", "n = 3.0")).unwrap().contains(r#"J::Num("3.0")"#));
+        wrong(&|f| f.replace("[chat]", "[chat]\nheaders = { \"X Bad\" = \"1\" }"), "is no header's name");
+        wrong(&|f| f.replace("[chat]", "[chat]\nbasic_auth = [\"only one\"]"), "basic_auth is [user, password]");
+        wrong(&|f| f.replace("{{as it is}}", "{as it is}"), "is no name");
+        wrong(&|f| f.replace("{{as it is}}", "as it is}"), "closes nothing");
+        wrong(&|f| f.replace("[chat.json]", "[chat.form]\na = \"{text}\"\n[chat.json]"), "json or form, not both");
+        wrong(&|f| f.split("[chat.json]").next().unwrap().to_string(), "a template has a body");
+        wrong(&|f| f.replace("[chat", "[slack"), "the name of a channel the crate has itself");
+        wrong(&|f| f.replace("[chat", "[Chat"), "a template's name is lower-case");
+        wrong(&|_| "not = [toml".to_string(), "not TOML");
     }
 }

@@ -383,6 +383,71 @@ Not built: a channel per user, a queue that outlives the process, and
 codes for a second sign-in factor. Nothing in the account routes sends
 through this by itself.
 
+### More messengers, by template (feature `notify-templates`)
+
+A messenger beyond those five is a **template**: where a request goes, its
+headers and its body, with places a message fills. Off by default:
+`features = ["notify-templates"]` (it turns `notify` on).
+
+The templates are set **when the crate is built, not when it runs**.
+`build.rs` reads them from a TOML file, checks them and writes them out as
+Rust: a name it does not know, a param nothing uses, a body that is no body
+stops the build with the template and what is wrong. No file is read, and no
+TOML parsed, at run time.
+
+- The crate's own file, [`notify-templates.toml`](notify-templates.toml), has
+  sixteen: `discord`, `google_chat`, `mattermost`, `rocket_chat`, `wecom`,
+  `lark`, `dingtalk`, `webex`, `pushover`, `pagerduty`, `opsgenie`, `ntfy`,
+  `ntfy_token`, `gotify`, `zulip`, `matrix`. Its head says what a template
+  may hold.
+- A site that wants another set names its own file at build time, and that
+  file is then the whole set:
+
+  ```toml
+  # .cargo/config.toml of the site
+  [env]
+  SIGNON_NOTIFY_TEMPLATES = { value = "notify-templates.toml", relative = true }
+  ```
+
+At run time a site gives only a template's params - its address, its token -
+each as `NOTIFY_<TEMPLATE>_<PARAM>`, and a template is in use when all of
+them are set (`NOTIFY_GOTIFY_SERVER` and `NOTIFY_GOTIFY_TOKEN`). In code it
+is `Channel::template("gotify", &[("server", ..), ("token", ..)])`. Every
+param is held as a secret, as a webhook's address is.
+
+```toml
+[matrix]
+params = ["homeserver", "token", "room"]
+url = "{homeserver}/_matrix/client/v3/rooms/{room}/send/m.room.message/{unique}"
+method = "PUT"
+[matrix.headers]
+Authorization = "Bearer {token}"
+[matrix.json]
+msgtype = "m.text"
+body = "{title}\n{text}\n{link_url}"
+```
+
+What fills a `{name}`: `{title}`, `{text}`, `{level}` (in the template's own
+words for info, warning and severe), `{link_url}`, `{link_label}`, a param of
+the template, and **`{unique}`** - a new id for every message sent, 32 hex
+digits, for a field that must not repeat (Matrix's transaction id, a
+deduplication key). `{{` and `}}` are plain braces.
+
+- A body is JSON (`json`, any shape) or a form (`form`); a value goes into it
+  as text and is escaped by the encoder, so no character of a message can
+  break it. In an address a value is one percent-encoded part - but the
+  param the address starts with, which is an address itself.
+- `max_chars`, `max_title` and `max_link` hold a message to what the service
+  takes, to the character: a longer text or title is cut, a longer link left
+  out.
+- `ok_field` and `ok_value` are for a service that answers 200 either way and
+  says in its body whether it took the message (WeCom, Lark, DingTalk).
+- A template sends what it is told and computes nothing: a signed request
+  (Lark's and DingTalk's signature check) is not one.
+- The sixteen are written from each service's public documentation and tried
+  against a receiver of our own, not against the services: send one message
+  through a template before relying on it.
+
 ## SSO (features `oauth`, `sso`, `saml`, `sso-broker`, `test-support`)
 
 `oauth` (default) is the seven social providers, signed in to in-process, with

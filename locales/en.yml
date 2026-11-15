@@ -48,6 +48,10 @@ notify-telegram-incomplete: "a Telegram channel needs a bot token and a chat"
 notify-no-mailer: "an email channel needs a mailer (Notifier::with_mailer)"
 notify-no-client: "no HTTP client: %{why}"
 notify-not-finished: "the send did not finish"
+notify-template-unknown: "no template named %{name} is in this build"
+notify-template-param: "the %{name} template needs %{param}"
+notify-template-not-one: "the %{name} template has no param %{param}, or has it twice"
+notify-header: "the header %{name} cannot be sent as it is set"
 
 # === mail: the confirmation of a new account (src/email.rs Templates::verify) ===
 mail-verify-subject: "Confirm your %{product} account"

@@ -48,6 +48,10 @@ notify-telegram-incomplete: "Telegram 通道需要机器人令牌和聊天"
 notify-no-mailer: "邮件通道需要 mailer（Notifier::with_mailer）"
 notify-no-client: "没有 HTTP 客户端：%{why}"
 notify-not-finished: "发送未完成"
+notify-template-unknown: "此构建中没有名为 %{name} 的模板"
+notify-template-param: "模板 %{name} 需要 %{param}"
+notify-template-not-one: "模板 %{name} 没有参数 %{param}，或该参数重复给出"
+notify-header: "请求头 %{name} 无法按当前设置发送"
 
 # === mail: the confirmation of a new account (src/email.rs Templates::verify) ===
 mail-verify-subject: "确认您的 %{product} 账户"

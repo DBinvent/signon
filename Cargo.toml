@@ -7,7 +7,7 @@ readme = "README.md"
 
 authors = ["Vladimir Krinitsyn <v.krinitsyn@gmail.com>", "DBinvent <support@dbinvent.com>"]
 license = "MIT"
-repository = "https://github.com/vkrinitsyn/signon.git"
+repository = "https://github.com/dbinvent/signon.git"
 homepage = "https://www.dbinvent.com/"
 documentation = "https://www.dbinvent.com/cluster"
 keywords = ["oauth2"]
@@ -59,6 +59,14 @@ welcome-remote = ["dep:reqwest"]
 # webhook, and email through the mailer. A library, no routes; each channel is one
 # HTTP POST, so it shares the optional reqwest dep. Off by default.
 notify = ["dep:reqwest"]
+# More messengers for `notify`, each a template: where a request goes, its headers, its body
+# (`src/notify/template.rs`). The templates are set at build time, not at run time: build.rs
+# turns `notify-templates.toml` - or the file SIGNON_NOTIFY_TEMPLATES names when the crate is
+# built - into Rust, and a mistake in it stops the build. A site gives only each template's
+# params at run time (NOTIFY_<TEMPLATE>_<PARAM>). Off by default.
+# (A template's form body is reqwest's `RequestBuilder::form`: part of reqwest 0.12 as it is,
+# a feature of its own, `form`, from 0.13.)
+notify-templates = ["notify", "dep:toml", "dep:urlencoding"]
 # Fixed-key signers for other crates' tests (`testing.rs`): id_tokens a mock
 # IdP can hand out, and with `saml` a signed SAML Response. Only ever enable
 # it from a `[dev-dependencies]` entry — the keys are test keys, made by
@@ -115,7 +123,13 @@ flate2 = { version = "1", optional = true }
 ring = { version = "0.17", optional = true }
 x509-parser = { version = "0.18", optional = true }
 
+[build-dependencies]
+# reads the notify templates when the crate is built (feature `notify-templates`)
+toml = { version = "0.8", optional = true }
+
 [dev-dependencies]
+# the tests of the build's own template reader (build/notify_templates.rs)
+toml = "0.8"
 tokio = { version = "1", features = ["full"] }
 # Drives the router in-process in the flow tests (`src/flow_tests.rs`).
 tower = { version = "0.5", features = ["util"] }

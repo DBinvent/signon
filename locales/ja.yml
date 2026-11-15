@@ -48,6 +48,10 @@ notify-telegram-incomplete: "Telegram チャンネルにはボットトークン
 notify-no-mailer: "メールチャンネルには mailer（Notifier::with_mailer）が必要です"
 notify-no-client: "HTTP クライアントがありません: %{why}"
 notify-not-finished: "送信が完了しませんでした"
+notify-template-unknown: "このビルドに %{name} というテンプレートはありません"
+notify-template-param: "テンプレート %{name} には %{param} が必要です"
+notify-template-not-one: "テンプレート %{name} にパラメータ %{param} はないか、二重に指定されています"
+notify-header: "ヘッダー %{name} はこの設定では送信できません"
 
 # === mail: the confirmation of a new account (src/email.rs Templates::verify) ===
 mail-verify-subject: "%{product} アカウントの確認"
