@@ -1,8 +1,7 @@
 //! Mailing list for product updates and news.
 //!
-//! Ported from `trust-atria-landing`'s waitlist (`worker/src/index.ts`
-//! `handleWaitlist` + `notify.ts`), which keeps the same data in Cloudflare
-//! D1. Here it lives in the home Postgres alongside everything else, so a
+//! Ported from a landing site's waitlist, which keeps the same data in
+//! Cloudflare D1. Here it lives in the site's Postgres alongside everything else, so a
 //! site that already runs one of these backends needs no second datastore and
 //! no second set of SMTP credentials.
 //!
@@ -60,6 +59,7 @@ pub fn router(state: AccountState) -> Router {
             state.clone(),
             crate::routes::origin_guard,
         ))
+        .layer(axum::middleware::from_fn_with_state(state.clone(), crate::routes::request_language)) // [i18n]
         .with_state(state)
 }
 
@@ -80,11 +80,15 @@ async fn subscribe(
     Json(req): Json<SubscribeReq>,
 ) -> Response {
     let Some(email) = normalize_email(&req.email) else {
-        return bad_request("a valid email is required").into_response();
+        return bad_request("err-email-required").into_response();
     };
 
-    if !state.limiter.check(&format!("sub:ip:{}", meta.ip_key()), SUBSCRIBE_PER_IP, HOUR)
-        || !state.limiter.check(&format!("sub:em:{email}"), SUBSCRIBE_PER_EMAIL, HOUR)
+    if !state
+        .limiter
+        .check(&format!("sub:ip:{}", meta.ip_key()), SUBSCRIBE_PER_IP, HOUR)
+        || !state
+            .limiter
+            .check(&format!("sub:em:{email}"), SUBSCRIBE_PER_EMAIL, HOUR)
     {
         return too_many().into_response();
     }
@@ -106,8 +110,9 @@ async fn subscribe(
 
     // Already confirmed and still subscribed: nothing to do, and nothing to
     // say about it either.
-    let already_active =
-        existing.as_ref().is_some_and(|s| s.confirmed && s.unsubscribed_at.is_none());
+    let already_active = existing
+        .as_ref()
+        .is_some_and(|s| s.confirmed && s.unsubscribed_at.is_none());
     let cooling_down = existing.as_ref().is_some_and(|s| {
         s.confirm_sent_at.is_some_and(|sent| {
             chrono::Utc::now() - sent
@@ -155,13 +160,20 @@ async fn subscribe(
                 // would hand out a link that is in no row at all.
                 let unsubscribe_url = state.config.unsubscribe_url(&stored_unsubscribe_token);
                 let (subject, text, html) = Templates::subscribe_confirm(
+                    crate::i18n::current(),
                     &state.config.product_name,
                     &state.config.subscribe_confirm_url(&confirm_token),
                     &unsubscribe_url,
                 );
                 state
                     .mailer
-                    .send_with_headers(&email, &subject, text, html, &list_headers(&unsubscribe_url))
+                    .send_with_headers(
+                        &email,
+                        &subject,
+                        text,
+                        html,
+                        &list_headers(&unsubscribe_url),
+                    )
                     .await;
                 notify_owner(&state, &email, source, &meta, referer.as_deref()).await;
             }
@@ -178,13 +190,13 @@ async fn subscribe(
         axum::http::StatusCode::OK,
         Json(json!({
             "status": "ok",
-            "note": "check your email to confirm the subscription",
+            "note": crate::i18n::text("note-check-email-subscription", &[]),
         })),
     )
         .into_response()
 }
 
-/// Mirrors `trust-atria-landing/worker/src/notify.ts`. Best effort: a failure
+/// The owner alert of a signup. Best effort: a failure
 /// to tell the owner must not change what the visitor sees.
 async fn notify_owner(
     state: &AccountState,
@@ -197,6 +209,7 @@ async fn notify_owner(
         return;
     }
     let (subject, text, html) = Templates::signup_notice(
+        state.config.site_lang(), // the owner's alert: the site's language, not the visitor's
         &state.config.product_name,
         email,
         source,
@@ -205,7 +218,10 @@ async fn notify_owner(
         referer,
     );
     for to in &state.config.notify_to {
-        state.mailer.send(to, &subject, text.clone(), html.clone()).await;
+        state
+            .mailer
+            .send(to, &subject, text.clone(), html.clone())
+            .await;
     }
 }
 
@@ -216,10 +232,16 @@ async fn notify_owner(
 /// depend on them finding the link in the body. `List-Unsubscribe-Post` is
 /// what makes the mail client's own "unsubscribe" button work without opening
 /// a browser, which is why the endpoint accepts POST as well as GET.
-fn list_headers(unsubscribe_url: &str) -> Vec<(String, String)> {
+pub(crate) fn list_headers(unsubscribe_url: &str) -> Vec<(String, String)> {
     vec![
-        ("List-Unsubscribe".to_string(), format!("<{unsubscribe_url}>")),
-        ("List-Unsubscribe-Post".to_string(), "List-Unsubscribe=One-Click".to_string()),
+        (
+            "List-Unsubscribe".to_string(),
+            format!("<{unsubscribe_url}>"),
+        ),
+        (
+            "List-Unsubscribe-Post".to_string(),
+            "List-Unsubscribe=One-Click".to_string(),
+        ),
     ]
 }
 
@@ -244,10 +266,16 @@ async fn finish_confirm(state: &AccountState, raw_token: &str) -> Response {
             // find the way off the list.
             let unsubscribe_url = state.config.unsubscribe_url(&unsubscribe_token);
             let (subject, text, html) =
-                Templates::subscribe_welcome(&state.config.product_name, &unsubscribe_url);
+                Templates::subscribe_welcome(crate::i18n::current(), &state.config.product_name, &unsubscribe_url);
             state
                 .mailer
-                .send_with_headers(&email, &subject, text, html, &list_headers(&unsubscribe_url))
+                .send_with_headers(
+                    &email,
+                    &subject,
+                    text,
+                    html,
+                    &list_headers(&unsubscribe_url),
+                )
                 .await;
             (
                 axum::http::StatusCode::OK,
@@ -259,7 +287,7 @@ async fn finish_confirm(state: &AccountState, raw_token: &str) -> Response {
             // Expired, already used, or never existed — one answer for all
             // three, and a `400` rather than a `401` because there is no
             // credential involved.
-            bad_request("that confirmation link is no longer valid").into_response()
+            bad_request("err-confirm-link").into_response()
         }
         Err(e) => {
             tracing::error!(%e, "confirm_subscriber");
@@ -284,7 +312,7 @@ async fn finish_unsubscribe(state: &AccountState, raw_token: &str) -> Response {
         // Idempotent: a second click is a success, not an error. Someone who
         // wants off a list should never be shown a failure page.
         Ok(true) => ok().into_response(),
-        Ok(false) => bad_request("that unsubscribe link is not valid").into_response(),
+        Ok(false) => bad_request("err-unsubscribe-link").into_response(),
         Err(e) => {
             tracing::error!(%e, "unsubscribe");
             internal_error().into_response()

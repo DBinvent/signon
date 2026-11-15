@@ -1,0 +1,7 @@
+# cargo audit's settings for signon (.github/workflows/audit.yml, and `cargo audit` here).
+[advisories]
+# RUSTSEC-2026-0459, libsqlite3-sys (the C SQLite it bundles): ignored (2026-11-14) because it is not built.
+# sqlx 0.8 names its SQLite driver in every lock file, whatever features are on; this crate takes the
+# postgres one only (`cargo tree -i libsqlite3-sys`: nothing). sqlx 0.8 pins libsqlite3-sys 0.30; the fixed
+# 0.39 comes with sqlx 0.9. Drop this with the move to sqlx 0.9.
+ignore = ["RUSTSEC-2026-0459"]

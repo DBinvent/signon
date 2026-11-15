@@ -1,14 +1,14 @@
 // Shared primitives for the account screens.
 //
 // Generated file — the source of truth is
-// ../../user_mgmt/web/components/account/ui.tsx. Edit it there and re-run
-// `user_mgmt/web/sync.sh <this-app>`; a local edit will be overwritten.
+// ../../signon/web/components/account/ui.tsx. Edit it there and re-run
+// `signon/web/sync.sh <this-app>`; a local edit will be overwritten.
 //
 // Plain Tailwind against the design tokens each app already defines in
 // app/globals.css (--background, --card, --primary, --muted-foreground …), so
 // the same markup takes on each site's palette with nothing imported. No
-// shadcn component imports on purpose: none of the four apps has
-// components/ui/ generated, and adding that dependency to all four to render
+// shadcn component imports on purpose: the apps this was written for have no
+// components/ui/ generated, and adding that dependency to each to render
 // six forms would not pay for itself.
 
 'use client'
@@ -104,6 +104,68 @@ export function Notice({ kind, children }: { kind: 'error' | 'success' | 'info';
   return (
     <div role="alert" className={`rounded-md border px-3 py-2 text-sm ${tone}`}>
       {children}
+    </div>
+  )
+}
+
+/** A labelled checkbox — the sign-up "email me" box and the profile switch. */
+export function Checkbox({
+  label,
+  hint,
+  ...props
+}: {
+  label: ReactNode
+  hint?: ReactNode
+} & Omit<React.InputHTMLAttributes<HTMLInputElement>, 'type'>) {
+  const id = props.id ?? props.name ?? 'checkbox'
+  return (
+    <div className="flex items-start gap-2.5">
+      <input
+        {...props}
+        id={id}
+        type="checkbox"
+        className="mt-0.5 size-4 shrink-0 rounded border-input accent-primary disabled:cursor-not-allowed"
+      />
+      <div className="space-y-0.5">
+        <label htmlFor={id} className="block text-sm">
+          {label}
+        </label>
+        {hint ? <p className="text-xs text-muted-foreground">{hint}</p> : null}
+      </div>
+    </div>
+  )
+}
+
+/**
+ * Answer to a `RegisteredHereError`: this browser already created or signed in
+ * to an account here. Sign in to it, or create another anyway — a nudge
+ * against duplicate accounts, never a wall.
+ */
+export function RegisteredHereNotice({
+  hint,
+  onAnother,
+  pending,
+}: {
+  hint: string | null
+  onAnother: () => void
+  pending?: boolean
+}) {
+  return (
+    <div role="alert" className="space-y-2 rounded-md border border-border bg-muted px-3 py-2 text-sm">
+      <p>
+        This browser already has an account here{hint ? <> ({hint})</> : null}. Sign in to it instead?
+      </p>
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+        <TextLink href="/account/sign-in">Sign in</TextLink>
+        <button
+          type="button"
+          onClick={onAnother}
+          disabled={pending}
+          className="text-muted-foreground underline-offset-4 hover:underline disabled:opacity-60"
+        >
+          Create another account anyway
+        </button>
+      </div>
     </div>
   )
 }

@@ -1,7 +1,7 @@
 //! Password hashing and the policy around it.
 //!
-//! argon2id at the crate defaults (which track OWASP guidance), never SHA-1 —
-//! see DESIGN.md §1 for what the 2021 user-cabinet did instead.
+//! argon2id at the crate defaults (which track OWASP guidance), never SHA-1 -
+//! see DESIGN.md section 1 for what older account code did instead.
 
 use argon2::password_hash::rand_core::OsRng;
 use argon2::password_hash::SaltString;
@@ -26,12 +26,29 @@ pub enum PolicyError {
 }
 
 impl PolicyError {
-    pub fn message(self) -> String {
+    /// The key of its message in `locales/*.yml`
+    pub(crate) fn key(self) -> &'static str {
         match self {
-            PolicyError::TooShort => format!("password must be at least {MIN_LEN} characters"),
-            PolicyError::TooLong => format!("password must be at most {MAX_LEN} characters"),
-            PolicyError::SameAsEmail => "password must not be your email address".to_string(),
+            PolicyError::TooShort => "err-password-short",
+            PolicyError::TooLong => "err-password-long",
+            PolicyError::SameAsEmail => "err-password-email",
         }
+    }
+
+    /// The API's answer for it: its code and its text in the request's language
+    pub(crate) fn body(self) -> serde_json::Value {
+        let (min, max) = (MIN_LEN.to_string(), MAX_LEN.to_string());
+        crate::i18n::error_body(self.key(), &[("min", &min), ("max", &max)])
+    }
+
+    /// Its code, `SO-Ennn`: the same whatever the language of the text
+    pub fn code(self) -> String {
+        self.body()["code"].as_str().unwrap_or_default().to_string()
+    }
+
+    /// Its text in the language of the request (English outside one), without the code
+    pub fn message(self) -> String {
+        self.body()["error"].as_str().unwrap_or_default().to_string()
     }
 }
 
@@ -100,7 +117,10 @@ mod tests {
     #[test]
     fn policy() {
         assert_eq!(check_policy("short", "a@b.c"), Err(PolicyError::TooShort));
-        assert_eq!(check_policy(&"x".repeat(257), "a@b.c"), Err(PolicyError::TooLong));
+        assert_eq!(
+            check_policy(&"x".repeat(257), "a@b.c"),
+            Err(PolicyError::TooLong)
+        );
         // Length is checked first, so the same-as-email case needs an address
         // that clears the minimum on its own.
         assert_eq!(

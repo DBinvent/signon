@@ -1,6 +1,6 @@
 // Generated file — the source of truth is
-// ../../../../user_mgmt/web/app/account/forgot/page.tsx. Edit it there and
-// re-run `user_mgmt/web/sync.sh <this-app>`.
+// ../../../../signon/web/app/account/forgot/page.tsx. Edit it there and
+// re-run `signon/web/sync.sh <this-app>`.
 //
 // A Suspense boundary is not optional here: these screens read the query
 // string with useSearchParams, and `output: 'export'` refuses to prerender a

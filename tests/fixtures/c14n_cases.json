@@ -1,0 +1,118 @@
+[
+ {
+  "name": "ns_pulled_down",
+  "input": "<r:root xmlns:r=\"urn:r\" xmlns:a=\"urn:a\" xmlns:unused=\"urn:u\"><a:child a:attr=\"1\" plain=\"2\"><a:leaf>t</a:leaf></a:child></r:root>",
+  "apex": "child",
+  "prefixes": [],
+  "expected": "<a:child xmlns:a=\"urn:a\" plain=\"2\" a:attr=\"1\"><a:leaf>t</a:leaf></a:child>"
+ },
+ {
+  "name": "unused_dropped",
+  "input": "<root xmlns=\"urn:d\" xmlns:x=\"urn:x\" xmlns:y=\"urn:y\"><x:apex><inner/></x:apex></root>",
+  "apex": "apex",
+  "prefixes": [],
+  "expected": "<x:apex xmlns:x=\"urn:x\"><inner xmlns=\"urn:d\"></inner></x:apex>"
+ },
+ {
+  "name": "default_ns_and_undeclare",
+  "input": "<root xmlns=\"urn:d\"><apex><child xmlns=\"\"><g/></child></apex></root>",
+  "apex": "apex",
+  "prefixes": [],
+  "expected": "<apex xmlns=\"urn:d\"><child xmlns=\"\"><g></g></child></apex>"
+ },
+ {
+  "name": "attr_sort",
+  "input": "<apex xmlns:b=\"urn:b\" xmlns:a=\"urn:a\" z=\"1\" b:y=\"2\" a:x=\"3\" a=\"4\" b:a=\"5\"/>",
+  "apex": "apex",
+  "prefixes": [],
+  "expected": "<apex xmlns:a=\"urn:a\" xmlns:b=\"urn:b\" a=\"4\" z=\"1\" a:x=\"3\" b:a=\"5\" b:y=\"2\"></apex>"
+ },
+ {
+  "name": "attr_escaping",
+  "input": "<apex v1=\"a&amp;b&lt;c&quot;d\" v2=\"tab&#9;nl&#10;cr&#13;\" v3=\"lit\tnl\nend\" v4='single \"q\" &apos;'/>",
+  "apex": "apex",
+  "prefixes": [],
+  "expected": "<apex v1=\"a&amp;b&lt;c&quot;d\" v2=\"tab&#x9;nl&#xA;cr&#xD;\" v3=\"lit nl end\" v4=\"single &quot;q&quot; '\"></apex>"
+ },
+ {
+  "name": "text_escaping",
+  "input": "<apex>a &amp; b &lt; c &gt; d &#13; e \"q\" 's'</apex>",
+  "apex": "apex",
+  "prefixes": [],
+  "expected": "<apex>a &amp; b &lt; c &gt; d &#xD; e \"q\" 's'</apex>"
+ },
+ {
+  "name": "cdata",
+  "input": "<apex><![CDATA[x < y & z > w]]></apex>",
+  "apex": "apex",
+  "prefixes": [],
+  "expected": "<apex>x &lt; y &amp; z &gt; w</apex>"
+ },
+ {
+  "name": "comments_removed",
+  "input": "<apex>a<!-- c -->b<x><!-- c2 --></x></apex>",
+  "apex": "apex",
+  "prefixes": [],
+  "expected": "<apex>ab<x></x></apex>"
+ },
+ {
+  "name": "prefixlist_inclusive",
+  "input": "<root xmlns:ds=\"urn:ds\" xmlns:xs=\"urn:xs\" xmlns:other=\"urn:o\"><ds:apex><ds:v>1</ds:v></ds:apex></root>",
+  "apex": "apex",
+  "prefixes": [
+   "xs"
+  ],
+  "expected": "<ds:apex xmlns:ds=\"urn:ds\" xmlns:xs=\"urn:xs\"><ds:v>1</ds:v></ds:apex>"
+ },
+ {
+  "name": "prefix_redeclared",
+  "input": "<p:root xmlns:p=\"urn:one\"><p:apex><p:in xmlns:p=\"urn:two\"><p:deep/></p:in></p:apex></p:root>",
+  "apex": "apex",
+  "prefixes": [],
+  "expected": "<p:apex xmlns:p=\"urn:one\"><p:in xmlns:p=\"urn:two\"><p:deep></p:deep></p:in></p:apex>"
+ },
+ {
+  "name": "xml_lang",
+  "input": "<root><apex xml:lang=\"en\" xmlns:x=\"urn:x\"><x:e xml:space=\"preserve\"> s </x:e></apex></root>",
+  "apex": "apex",
+  "prefixes": [],
+  "expected": "<apex xml:lang=\"en\"><x:e xmlns:x=\"urn:x\" xml:space=\"preserve\"> s </x:e></apex>"
+ },
+ {
+  "name": "pi_kept",
+  "input": "<apex><?target some data?><b/></apex>",
+  "apex": "apex",
+  "prefixes": [],
+  "expected": "<apex><?target some data?><b></b></apex>"
+ },
+ {
+  "name": "saml_like",
+  "input": "<samlp:Response xmlns:samlp=\"urn:oasis:names:tc:SAML:2.0:protocol\" xmlns:saml=\"urn:oasis:names:tc:SAML:2.0:assertion\" ID=\"_r1\" Version=\"2.0\">\n  <saml:Issuer>https://idp.example.com</saml:Issuer>\n  <saml:Assertion xmlns:xs=\"http://www.w3.org/2001/XMLSchema\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" ID=\"_a1\" Version=\"2.0\" IssueInstant=\"2026-10-04T10:00:00Z\">\n    <saml:Issuer>https://idp.example.com</saml:Issuer>\n    <saml:Subject><saml:NameID Format=\"urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress\">bob@acme.com</saml:NameID></saml:Subject>\n    <saml:AttributeStatement><saml:Attribute Name=\"mail\"><saml:AttributeValue xsi:type=\"xs:string\">bob@acme.com</saml:AttributeValue></saml:Attribute></saml:AttributeStatement>\n  </saml:Assertion>\n</samlp:Response>",
+  "apex": "Assertion",
+  "prefixes": [
+   "xs"
+  ],
+  "expected": "<saml:Assertion xmlns:saml=\"urn:oasis:names:tc:SAML:2.0:assertion\" xmlns:xs=\"http://www.w3.org/2001/XMLSchema\" ID=\"_a1\" IssueInstant=\"2026-10-04T10:00:00Z\" Version=\"2.0\">\n    <saml:Issuer>https://idp.example.com</saml:Issuer>\n    <saml:Subject><saml:NameID Format=\"urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress\">bob@acme.com</saml:NameID></saml:Subject>\n    <saml:AttributeStatement><saml:Attribute Name=\"mail\"><saml:AttributeValue xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xsi:type=\"xs:string\">bob@acme.com</saml:AttributeValue></saml:Attribute></saml:AttributeStatement>\n  </saml:Assertion>"
+ },
+ {
+  "name": "saml_like_no_prefixlist",
+  "input": "<samlp:Response xmlns:samlp=\"urn:oasis:names:tc:SAML:2.0:protocol\" xmlns:saml=\"urn:oasis:names:tc:SAML:2.0:assertion\" ID=\"_r1\" Version=\"2.0\">\n  <saml:Issuer>https://idp.example.com</saml:Issuer>\n  <saml:Assertion xmlns:xs=\"http://www.w3.org/2001/XMLSchema\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" ID=\"_a1\" Version=\"2.0\" IssueInstant=\"2026-10-04T10:00:00Z\">\n    <saml:Issuer>https://idp.example.com</saml:Issuer>\n    <saml:Subject><saml:NameID Format=\"urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress\">bob@acme.com</saml:NameID></saml:Subject>\n    <saml:AttributeStatement><saml:Attribute Name=\"mail\"><saml:AttributeValue xsi:type=\"xs:string\">bob@acme.com</saml:AttributeValue></saml:Attribute></saml:AttributeStatement>\n  </saml:Assertion>\n</samlp:Response>",
+  "apex": "Assertion",
+  "prefixes": [],
+  "expected": "<saml:Assertion xmlns:saml=\"urn:oasis:names:tc:SAML:2.0:assertion\" ID=\"_a1\" IssueInstant=\"2026-10-04T10:00:00Z\" Version=\"2.0\">\n    <saml:Issuer>https://idp.example.com</saml:Issuer>\n    <saml:Subject><saml:NameID Format=\"urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress\">bob@acme.com</saml:NameID></saml:Subject>\n    <saml:AttributeStatement><saml:Attribute Name=\"mail\"><saml:AttributeValue xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xsi:type=\"xs:string\">bob@acme.com</saml:AttributeValue></saml:Attribute></saml:AttributeStatement>\n  </saml:Assertion>"
+ },
+ {
+  "name": "default_on_root_used_deep",
+  "input": "<root xmlns=\"urn:d\" xmlns:q=\"urn:q\"><mid><apex q:a=\"1\"><leaf/></apex></mid></root>",
+  "apex": "apex",
+  "prefixes": [],
+  "expected": "<apex xmlns=\"urn:d\" xmlns:q=\"urn:q\" q:a=\"1\"><leaf></leaf></apex>"
+ },
+ {
+  "name": "crlf_text",
+  "input": "<apex>line1\r\nline2\rline3</apex>",
+  "apex": "apex",
+  "prefixes": [],
+  "expected": "<apex>line1\nline2\nline3</apex>"
+ }
+]

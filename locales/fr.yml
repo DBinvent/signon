@@ -1,0 +1,103 @@
+_version: 1
+# [i18n] signon's messages in French: one file per language (en, and - written with the code, not
+# reviewed by a native speaker - ru, fr, de, zh, ja), every key in each. An error's message starts with its
+# code, SO-Ennn, the same in every language (src/i18n.rs tests it): the API answers the code beside the
+# text, so a client can act on it whatever the language. %{name} is filled in by the code.
+
+# === the API's errors: `{"error": <the text>, "code": <the code>}` (src/routes.rs, current_user.rs, broker.rs, subscribe.rs, account_mail.rs) ===
+err-credentials: "SO-E001 identifiants invalides"
+err-too-many: "SO-E002 trop de requêtes, réessayez plus tard"
+err-internal: "SO-E003 erreur interne"
+err-mail-unavailable: "SO-E004 l'envoi d'e-mails est momentanément indisponible, réessayez sous peu"
+err-forbidden: "SO-E005 accès interdit"
+err-not-found: "SO-E006 introuvable"
+err-invalid-email: "SO-E007 adresse e-mail invalide"
+err-email-required: "SO-E008 une adresse e-mail valide est requise"
+err-invalid-link: "SO-E009 lien invalide"
+err-confirm-link: "SO-E010 ce lien de confirmation n'est plus valide"
+err-unsubscribe-link: "SO-E011 ce lien de désabonnement n'est pas valide"
+err-account-unsubscribe-link: "SO-E012 le lien de désabonnement n'est pas valide"
+err-no-email-yet: "SO-E013 aucune adresse e-mail à laquelle écrire pour l'instant"
+err-no-email-no-password: "SO-E014 ce compte n'a pas d'adresse e-mail pour se connecter, il ne peut donc pas avoir de mot de passe"
+err-mail-kind: "SO-E015 kind doit être welcome ou followup"
+err-mail-days: "SO-E016 days doit être compris entre 0 et 365"
+err-template-off: "SO-E017 le modèle n'est pas approuvé ou son envoi n'est pas activé"
+err-unknown-provider: "SO-E018 fournisseur inconnu"
+err-method: "SO-E019 méthode non autorisée"
+err-sso-unavailable: "SO-E020 l'authentification unique est indisponible, réessayez sous peu"
+err-account-exists: "SO-E021 un compte existe déjà avec cette adresse - connectez-vous-y d'une autre manière"
+err-password-short: "SO-E022 le mot de passe doit comporter au moins %{min} caractères"
+err-password-long: "SO-E023 le mot de passe doit comporter au plus %{max} caractères"
+err-password-email: "SO-E024 le mot de passe ne doit pas être votre adresse e-mail"
+err-registered-here: "SO-E025 un compte a déjà été créé dans ce navigateur"
+err-sso-required: "SO-E026 cette adresse se connecte via l'authentification unique de son organisation"
+
+# === what a request that went well is told, beside its status (no code: not an error) ===
+note-check-email-account: "consultez votre boîte e-mail pour activer votre compte"
+note-check-email-subscription: "consultez votre boîte e-mail pour confirmer l'abonnement"
+
+# === notifications (src/notify.rs): why a message did not reach a channel, and the reasons of a channel that is not set up - the tail of SO-E040, no code of their own ===
+err-notify-config: "SO-E040 non configuré : %{why}"
+err-notify-refused: "SO-E041 refusé avec %{status}%{reason}"
+err-notify-rate: "SO-E042 trop de messages, réessayez dans %{secs} s"
+err-notify-unreachable: "SO-E043 non joint : %{why}"
+err-notify-mail: "SO-E044 e-mail non envoyé : %{why}"
+notify-not-url: "l'adresse n'est pas une URL"
+notify-not-https: "l'adresse n'est pas une URL https"
+notify-telegram-incomplete: "un canal Telegram a besoin d'un jeton de bot et d'un chat"
+notify-no-mailer: "un canal e-mail a besoin d'un mailer (Notifier::with_mailer)"
+notify-no-client: "pas de client HTTP : %{why}"
+notify-not-finished: "l'envoi ne s'est pas terminé"
+
+# === mail: the confirmation of a new account (src/email.rs Templates::verify) ===
+mail-verify-subject: "Confirmez votre compte %{product}"
+mail-verify-intro: "Confirmez votre adresse e-mail pour activer votre compte %{product}."
+mail-verify-code: "Ou saisissez ce code sur la page de confirmation : %{code}"
+mail-verify-ignore: "Si vous n'avez pas créé ce compte, ignorez ce message."
+
+# === mail: the code that finishes a sign-in through a provider (Templates::sign_in_code) ===
+mail-code-subject: "Votre code de connexion %{product}"
+mail-code-intro: "Quelqu'un se connecte à %{product} avec %{provider} en utilisant cette adresse."
+mail-code-enter: "Saisissez ce code pour terminer : %{code}"
+mail-code-note: "Le code ne fonctionne qu'une fois et expire dans une heure. Si ce n'était pas vous, ignorez ce message - rien ne se passe sans le code."
+
+# === mail: a password reset (Templates::reset) ===
+mail-reset-subject: "Réinitialisez votre mot de passe %{product}"
+mail-reset-intro: "Utilisez ce lien pour choisir un nouveau mot de passe %{product} :"
+mail-reset-expiry: "Le lien ne fonctionne qu'une fois et expire dans %{hours} heure(s)."
+mail-reset-ignore: "Si vous n'êtes pas à l'origine de cette demande, ignorez ce message - votre mot de passe est inchangé."
+
+# === mail: an address that already has an account (Templates::already_registered). %{link} and %{end} open and close the link of the HTML part ===
+mail-exists-subject: "Vous avez déjà un compte %{product}"
+mail-exists-intro: "Quelqu'un vient d'essayer de créer un compte %{product} avec cette adresse - vous en avez déjà un."
+mail-exists-sign-in: "Se connecter"
+mail-exists-forgot-text: "Mot de passe oublié ? Choisissez-en un nouveau (lien à usage unique, expire dans %{hours} heure(s)) :"
+mail-exists-forgot-html: "Mot de passe oublié ? %{link}Choisissez-en un nouveau%{end} - le lien ne fonctionne qu'une fois et expire dans %{hours} heure(s)."
+mail-exists-ignore: "Si ce n'était pas vous, aucune action n'est nécessaire - votre compte est inchangé."
+
+# === mail: the updates-and-news list (Templates::subscribe_confirm, subscribe_welcome) ===
+mail-sub-confirm-subject: "Confirmez votre abonnement aux actualités %{product}"
+mail-sub-confirm-intro: "Confirmez que vous souhaitez recevoir les actualités et nouveautés de %{product} à cette adresse :"
+mail-sub-confirm-nothing: "Nous n'enverrons rien d'autre tant que vous ne l'aurez pas fait."
+mail-sub-confirm-ignore-text: "Si vous n'avez rien demandé, ignorez ce message, ou retirez l'adresse ici :"
+mail-sub-confirm-ignore-html: "Si vous n'avez rien demandé, ignorez ce message, ou %{link}retirez l'adresse%{end}."
+mail-sub-welcome-subject: "Vous êtes abonné aux actualités %{product}"
+mail-sub-welcome-intro: "Vous êtes sur la liste - nous enverrons ici les actualités et nouveautés de %{product}."
+mail-sub-welcome-out-text: "Vous pouvez vous désabonner à tout moment :"
+mail-sub-welcome-out-html: "Vous pouvez %{link}vous désabonner%{end} à tout moment."
+
+# === mail: the footer of a mail to an account that is not about the account (Templates::welcome). %{article} is English's a/an ===
+mail-footer-why: "Vous recevez ce message parce que vous avez créé un compte %{product}."
+mail-footer-stop-text: "Pour ne plus recevoir ce type d'e-mails : %{url}"
+mail-footer-stop-html: "%{link}Ne plus recevoir ce type d'e-mails%{end}."
+
+# === mail: the owner's alert of a list signup, in the site's language (Templates::signup_notice) ===
+mail-signup-subject: "Nouvelle inscription à la lettre d'information %{product} : %{email}"
+mail-signup-intro: "%{email} a demandé les actualités %{product}."
+mail-signup-when: "Quand"
+mail-signup-source: "Source"
+mail-signup-address: "Adresse"
+mail-signup-referer: "Référent"
+mail-signup-agent: "Agent"
+mail-signup-unconfirmed: "Pas encore confirmé - il s'agit de l'inscription, pas de la double confirmation."
+mail-signup-all: "Toutes les inscriptions :"

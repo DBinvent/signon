@@ -1,0 +1,103 @@
+_version: 1
+# [i18n] signon's messages in Russian: one file per language (en, and - written with the code, not
+# reviewed by a native speaker - ru, fr, de, zh, ja), every key in each. An error's message starts with its
+# code, SO-Ennn, the same in every language (src/i18n.rs tests it): the API answers the code beside the
+# text, so a client can act on it whatever the language. %{name} is filled in by the code.
+
+# === the API's errors: `{"error": <the text>, "code": <the code>}` (src/routes.rs, current_user.rs, broker.rs, subscribe.rs, account_mail.rs) ===
+err-credentials: "SO-E001 неверные учётные данные"
+err-too-many: "SO-E002 слишком много запросов, повторите позже"
+err-internal: "SO-E003 внутренняя ошибка"
+err-mail-unavailable: "SO-E004 отправка почты сейчас недоступна, повторите чуть позже"
+err-forbidden: "SO-E005 доступ запрещён"
+err-not-found: "SO-E006 не найдено"
+err-invalid-email: "SO-E007 некорректный адрес электронной почты"
+err-email-required: "SO-E008 нужен действительный адрес электронной почты"
+err-invalid-link: "SO-E009 недействительная ссылка"
+err-confirm-link: "SO-E010 эта ссылка для подтверждения больше не действует"
+err-unsubscribe-link: "SO-E011 эта ссылка для отписки недействительна"
+err-account-unsubscribe-link: "SO-E012 ссылка для отписки недействительна"
+err-no-email-yet: "SO-E013 пока нет адреса, на который можно отправить письмо"
+err-no-email-no-password: "SO-E014 у этой учётной записи нет адреса для входа, поэтому пароля у неё быть не может"
+err-mail-kind: "SO-E015 kind должен быть welcome или followup"
+err-mail-days: "SO-E016 days должно быть от 0 до 365"
+err-template-off: "SO-E017 шаблон не утверждён или его отправка не включена"
+err-unknown-provider: "SO-E018 неизвестный провайдер"
+err-method: "SO-E019 метод не разрешён"
+err-sso-unavailable: "SO-E020 единый вход сейчас недоступен, повторите чуть позже"
+err-account-exists: "SO-E021 учётная запись с этим адресом уже существует - войдите в неё другим способом"
+err-password-short: "SO-E022 пароль должен содержать не менее %{min} символов"
+err-password-long: "SO-E023 пароль должен содержать не более %{max} символов"
+err-password-email: "SO-E024 пароль не должен совпадать с вашим адресом электронной почты"
+err-registered-here: "SO-E025 в этом браузере уже была создана учётная запись"
+err-sso-required: "SO-E026 для этого адреса вход выполняется через единый вход его организации"
+
+# === what a request that went well is told, beside its status (no code: not an error) ===
+note-check-email-account: "проверьте почту, чтобы активировать учётную запись"
+note-check-email-subscription: "проверьте почту, чтобы подтвердить подписку"
+
+# === notifications (src/notify.rs): why a message did not reach a channel, and the reasons of a channel that is not set up - the tail of SO-E040, no code of their own ===
+err-notify-config: "SO-E040 не настроено: %{why}"
+err-notify-refused: "SO-E041 отклонено с кодом %{status}%{reason}"
+err-notify-rate: "SO-E042 слишком много сообщений, повторите через %{secs} с"
+err-notify-unreachable: "SO-E043 не доставлено: %{why}"
+err-notify-mail: "SO-E044 письмо не отправлено: %{why}"
+notify-not-url: "адрес не является URL"
+notify-not-https: "адрес не является https-URL"
+notify-telegram-incomplete: "каналу Telegram нужны токен бота и чат"
+notify-no-mailer: "каналу электронной почты нужен mailer (Notifier::with_mailer)"
+notify-no-client: "нет HTTP-клиента: %{why}"
+notify-not-finished: "отправка не завершилась"
+
+# === mail: the confirmation of a new account (src/email.rs Templates::verify) ===
+mail-verify-subject: "Подтвердите учётную запись %{product}"
+mail-verify-intro: "Подтвердите адрес электронной почты, чтобы активировать учётную запись %{product}."
+mail-verify-code: "Или введите этот код на странице подтверждения: %{code}"
+mail-verify-ignore: "Если вы не создавали эту учётную запись, не обращайте внимания на это письмо."
+
+# === mail: the code that finishes a sign-in through a provider (Templates::sign_in_code) ===
+mail-code-subject: "Ваш код для входа в %{product}"
+mail-code-intro: "Кто-то входит в %{product} через %{provider}, используя этот адрес."
+mail-code-enter: "Введите этот код, чтобы завершить вход: %{code}"
+mail-code-note: "Код действует один раз и истекает через час. Если это были не вы, не обращайте внимания на это письмо - без кода ничего не произойдёт."
+
+# === mail: a password reset (Templates::reset) ===
+mail-reset-subject: "Сброс пароля %{product}"
+mail-reset-intro: "Перейдите по этой ссылке, чтобы задать новый пароль %{product}:"
+mail-reset-expiry: "Ссылка действует один раз и истекает через %{hours} ч."
+mail-reset-ignore: "Если вы этого не запрашивали, не обращайте внимания на это письмо - ваш пароль не изменён."
+
+# === mail: an address that already has an account (Templates::already_registered). %{link} and %{end} open and close the link of the HTML part ===
+mail-exists-subject: "У вас уже есть учётная запись %{product}"
+mail-exists-intro: "Кто-то только что попытался создать учётную запись %{product} с этим адресом - она у вас уже есть."
+mail-exists-sign-in: "Войти"
+mail-exists-forgot-text: "Забыли пароль? Задайте новый (ссылка действует один раз, истекает через %{hours} ч.):"
+mail-exists-forgot-html: "Забыли пароль? %{link}Задайте новый%{end} - ссылка действует один раз и истекает через %{hours} ч."
+mail-exists-ignore: "Если это были не вы, ничего делать не нужно - ваша учётная запись не изменена."
+
+# === mail: the updates-and-news list (Templates::subscribe_confirm, subscribe_welcome) ===
+mail-sub-confirm-subject: "Подтвердите подписку на новости %{product}"
+mail-sub-confirm-intro: "Подтвердите, что хотите получать обновления и новости %{product} на этот адрес:"
+mail-sub-confirm-nothing: "Пока вы этого не сделаете, мы больше ничего не пришлём."
+mail-sub-confirm-ignore-text: "Если вы этого не запрашивали, не обращайте внимания на это письмо или удалите адрес здесь:"
+mail-sub-confirm-ignore-html: "Если вы этого не запрашивали, не обращайте внимания на это письмо или %{link}удалите адрес%{end}."
+mail-sub-welcome-subject: "Вы подписаны на новости %{product}"
+mail-sub-welcome-intro: "Вы в списке - мы будем присылать сюда обновления и новости %{product}."
+mail-sub-welcome-out-text: "Отписаться можно в любой момент:"
+mail-sub-welcome-out-html: "Вы можете %{link}отписаться%{end} в любой момент."
+
+# === mail: the footer of a mail to an account that is not about the account (Templates::welcome). %{article} is English's a/an ===
+mail-footer-why: "Вы получили это письмо, потому что создали учётную запись %{product}."
+mail-footer-stop-text: "Чтобы не получать такие письма: %{url}"
+mail-footer-stop-html: "%{link}Не получать такие письма%{end}."
+
+# === mail: the owner's alert of a list signup, in the site's language (Templates::signup_notice) ===
+mail-signup-subject: "Новая подписка на рассылку %{product}: %{email}"
+mail-signup-intro: "%{email} запросил обновления %{product}."
+mail-signup-when: "Когда"
+mail-signup-source: "Источник"
+mail-signup-address: "Адрес"
+mail-signup-referer: "Реферер"
+mail-signup-agent: "Агент"
+mail-signup-unconfirmed: "Ещё не подтверждено - это заявка, а не двойное подтверждение."
+mail-signup-all: "Все подписки:"

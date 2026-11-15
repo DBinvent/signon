@@ -1,11 +1,11 @@
 //! Applies `schema.yaml` to a database, standalone.
 //!
-//! The four services all call `user_mgmt::migrate` at startup; this is the
+//! A service calls `signon::migrate` at startup; this is the
 //! same call with nothing else attached, for provisioning a fresh database or
 //! checking what a schema change would do without booting a service.
 //!
 //! ```sh
-//! cargo run --example migrate -- 'postgres:///dashqw?host=/var/run/postgresql&user=vk'
+//! cargo run --example migrate -- 'postgres:///mysite?host=/var/run/postgresql&user=mysite'
 //! ```
 //!
 //! On the URL shape: `sqlx` rejects marg`s default
@@ -22,7 +22,7 @@ async fn main() -> anyhow::Result<()> {
         std::process::exit(2);
     };
 
-    user_mgmt::migrate(&db_url).await?;
+    signon::migrate(&db_url).await?;
     println!("schema applied");
     Ok(())
 }
@@ -30,8 +30,7 @@ async fn main() -> anyhow::Result<()> {
 fn tracing_subscriber_init() {
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
         .init();
 }

@@ -7,15 +7,15 @@
 //! ```sh
 //! # Cloudflare Email Sending
 //! EMAIL_PROVIDER=cloudflare \
-//! CF_ACCOUNT_ID=58a47fbc106121925e936c15c72b9d37 \
+//! CF_ACCOUNT_ID=<your Cloudflare account id> \
 //! CF_EMAIL_TOKEN=<token with account Email Sending: Send> \
-//! EMAIL_FROM=no-reply@knownby.work EMAIL_FROM_NAME=QW \
-//!   cargo run --example send_test -- vlad4kr7@gmail.com
+//! EMAIL_FROM=no-reply@example.com EMAIL_FROM_NAME=Acme \
+//!   cargo run --example send_test -- you@example.com
 //!
 //! # SMTP relay
 //! EMAIL_HOST=smtp-relay.brevo.com EMAIL_PORT=587 \
-//! EMAIL_LOGIN=... EMAIL_KEY=... EMAIL_FROM=no-reply@knownby.work \
-//!   cargo run --example send_test -- vlad4kr7@gmail.com
+//! EMAIL_LOGIN=... EMAIL_KEY=... EMAIL_FROM=no-reply@example.com \
+//!   cargo run --example send_test -- you@example.com
 //! ```
 //!
 //! It runs `is_healthy()` first and stops there if the probe fails, because
@@ -31,7 +31,7 @@ async fn main() -> anyhow::Result<()> {
         std::process::exit(2);
     };
 
-    let mailer = user_mgmt::Mailer::from_env()?;
+    let mailer = signon::Mailer::from_env()?;
 
     if !mailer.is_healthy().await {
         anyhow::bail!(
@@ -43,19 +43,19 @@ async fn main() -> anyhow::Result<()> {
     }
     println!("health probe: ok ({})", mailer.host());
 
-    let unsubscribe = "https://dash.knownby.work/news/unsubscribe?token=send-test-not-a-real-token";
+    let unsubscribe = "https://dash.example.com/news/unsubscribe?token=send-test-not-a-real-token";
     mailer
         .send_with_headers(
             &to,
-            "user_mgmt send test",
+            "signon send test",
             format!(
-                "This is a one-off deliverability test from user_mgmt.\n\n\
+                "This is a one-off deliverability test from signon.\n\n\
                  If it arrived, registration, password-reset and newsletter-confirmation mail \
                  will reach this address too.\n\n\
                  Unsubscribe (not a real token, this message is not from a list):\n{unsubscribe}\n"
             ),
             format!(
-                "<p>This is a one-off deliverability test from <code>user_mgmt</code>.</p>\
+                "<p>This is a one-off deliverability test from <code>signon</code>.</p>\
                  <p>If it arrived, registration, password-reset and newsletter-confirmation mail \
                  will reach this address too.</p>\
                  <p><a href=\"{unsubscribe}\">Unsubscribe</a> (not a real token — this message is \
@@ -84,8 +84,7 @@ async fn main() -> anyhow::Result<()> {
 fn tracing_subscriber_init() {
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
         .init();
 }

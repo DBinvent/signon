@@ -21,3 +21,17 @@ target
 #.idea/
 # CocoIndex Code (ccc)
 /.cocoindex_code/
+
+# Test keys: nothing named private and nothing that holds a private key is pushed.
+# The tests make the ones they sign with when they are missing (src/fixture_keys.rs).
+/tests/fixtures/ec_p256_private.pem
+/tests/fixtures/ec_p256_jwk_x.txt
+/tests/fixtures/ec_p256_jwk_y.txt
+/tests/fixtures/saml/signer_key.pem
+/tests/fixtures/saml/signer_cert.pem
+/tests/fixtures/**/*_key.pem
+/tests/fixtures/**/*private*
+/tests/fixtures/.keys.lock
+# The SAML test documents and their certificates: made by the tests where the directory is
+# missing (src/saml/fixture_gen.rs). The set signed by signxml stays on the machine that has it.
+/tests/fixtures/saml/

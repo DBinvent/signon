@@ -1,8 +1,8 @@
 // Registration, step two: confirm the address.
 //
 // Generated file — the source of truth is
-// ../../user_mgmt/web/components/account/verify-panel.tsx. Edit it there and
-// re-run `user_mgmt/web/sync.sh <this-app>`.
+// ../../signon/web/components/account/verify-panel.tsx. Edit it there and
+// re-run `signon/web/sync.sh <this-app>`.
 //
 // Two ways in, both landing on this one page:
 //

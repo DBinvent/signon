@@ -1,0 +1,103 @@
+_version: 1
+# [i18n] signon's messages in Japanese: one file per language (en, and - written with the code, not
+# reviewed by a native speaker - ru, fr, de, zh, ja), every key in each. An error's message starts with its
+# code, SO-Ennn, the same in every language (src/i18n.rs tests it): the API answers the code beside the
+# text, so a client can act on it whatever the language. %{name} is filled in by the code.
+
+# === the API's errors: `{"error": <the text>, "code": <the code>}` (src/routes.rs, current_user.rs, broker.rs, subscribe.rs, account_mail.rs) ===
+err-credentials: "SO-E001 認証情報が正しくありません"
+err-too-many: "SO-E002 リクエストが多すぎます。しばらくしてからお試しください"
+err-internal: "SO-E003 内部エラー"
+err-mail-unavailable: "SO-E004 現在メールを送信できません。少し待ってからお試しください"
+err-forbidden: "SO-E005 アクセスが禁止されています"
+err-not-found: "SO-E006 見つかりません"
+err-invalid-email: "SO-E007 メールアドレスが正しくありません"
+err-email-required: "SO-E008 有効なメールアドレスが必要です"
+err-invalid-link: "SO-E009 リンクが無効です"
+err-confirm-link: "SO-E010 この確認リンクは無効になりました"
+err-unsubscribe-link: "SO-E011 この配信停止リンクは無効です"
+err-account-unsubscribe-link: "SO-E012 配信停止リンクが無効です"
+err-no-email-yet: "SO-E013 送信先のメールアドレスがまだありません"
+err-no-email-no-password: "SO-E014 このアカウントにはサインイン用のメールアドレスがないため、パスワードを設定できません"
+err-mail-kind: "SO-E015 kind は welcome か followup でなければなりません"
+err-mail-days: "SO-E016 days は 0 から 365 の範囲でなければなりません"
+err-template-off: "SO-E017 テンプレートが承認されていないか、送信が有効になっていません"
+err-unknown-provider: "SO-E018 不明なプロバイダーです"
+err-method: "SO-E019 許可されていないメソッドです"
+err-sso-unavailable: "SO-E020 シングルサインオンは現在利用できません。少し待ってからお試しください"
+err-account-exists: "SO-E021 このアドレスのアカウントは既に存在します - 別の方法でサインインしてください"
+err-password-short: "SO-E022 パスワードは %{min} 文字以上にしてください"
+err-password-long: "SO-E023 パスワードは %{max} 文字以内にしてください"
+err-password-email: "SO-E024 パスワードにメールアドレスは使えません"
+err-registered-here: "SO-E025 このブラウザーでは既にアカウントが作成されています"
+err-sso-required: "SO-E026 このアドレスは所属組織のシングルサインオンでサインインします"
+
+# === what a request that went well is told, beside its status (no code: not an error) ===
+note-check-email-account: "メールを確認してアカウントを有効にしてください"
+note-check-email-subscription: "メールを確認して購読を確定してください"
+
+# === notifications (src/notify.rs): why a message did not reach a channel, and the reasons of a channel that is not set up - the tail of SO-E040, no code of their own ===
+err-notify-config: "SO-E040 未設定: %{why}"
+err-notify-refused: "SO-E041 拒否されました（%{status}）%{reason}"
+err-notify-rate: "SO-E042 メッセージが多すぎます。%{secs} 秒後に再試行してください"
+err-notify-unreachable: "SO-E043 到達できません: %{why}"
+err-notify-mail: "SO-E044 メールを送信できませんでした: %{why}"
+notify-not-url: "アドレスが URL ではありません"
+notify-not-https: "アドレスが https の URL ではありません"
+notify-telegram-incomplete: "Telegram チャンネルにはボットトークンとチャットが必要です"
+notify-no-mailer: "メールチャンネルには mailer（Notifier::with_mailer）が必要です"
+notify-no-client: "HTTP クライアントがありません: %{why}"
+notify-not-finished: "送信が完了しませんでした"
+
+# === mail: the confirmation of a new account (src/email.rs Templates::verify) ===
+mail-verify-subject: "%{product} アカウントの確認"
+mail-verify-intro: "メールアドレスを確認して %{product} アカウントを有効にしてください。"
+mail-verify-code: "または確認ページでこのコードを入力してください: %{code}"
+mail-verify-ignore: "このアカウントを作成していない場合は、このメールを無視してください。"
+
+# === mail: the code that finishes a sign-in through a provider (Templates::sign_in_code) ===
+mail-code-subject: "%{product} のサインインコード"
+mail-code-intro: "このアドレスを使って、%{provider} で %{product} へのサインインが行われています。"
+mail-code-enter: "完了するにはこのコードを入力してください: %{code}"
+mail-code-note: "コードは一度だけ使え、1 時間で失効します。心当たりがない場合はこのメールを無視してください - コードがなければ何も起こりません。"
+
+# === mail: a password reset (Templates::reset) ===
+mail-reset-subject: "%{product} のパスワードの再設定"
+mail-reset-intro: "このリンクから %{product} の新しいパスワードを設定してください:"
+mail-reset-expiry: "リンクは一度だけ使え、%{hours} 時間で失効します。"
+mail-reset-ignore: "心当たりがない場合はこのメールを無視してください - パスワードは変更されていません。"
+
+# === mail: an address that already has an account (Templates::already_registered). %{link} and %{end} open and close the link of the HTML part ===
+mail-exists-subject: "%{product} アカウントは既にお持ちです"
+mail-exists-intro: "このアドレスで %{product} アカウントを作成しようとした人がいます - アカウントは既にあります。"
+mail-exists-sign-in: "サインイン"
+mail-exists-forgot-text: "パスワードをお忘れですか? 新しいパスワードを設定してください（リンクは一度だけ有効、%{hours} 時間で失効）:"
+mail-exists-forgot-html: "パスワードをお忘れですか? %{link}新しいパスワードを設定%{end} - リンクは一度だけ使え、%{hours} 時間で失効します。"
+mail-exists-ignore: "心当たりがない場合は何もする必要はありません - アカウントは変更されていません。"
+
+# === mail: the updates-and-news list (Templates::subscribe_confirm, subscribe_welcome) ===
+mail-sub-confirm-subject: "%{product} の更新情報の購読確認"
+mail-sub-confirm-intro: "このアドレスで %{product} の更新情報とニュースを受け取ることを確認してください:"
+mail-sub-confirm-nothing: "確認が済むまで、ほかのメールは送信しません。"
+mail-sub-confirm-ignore-text: "心当たりがない場合はこのメールを無視するか、こちらでアドレスを削除してください:"
+mail-sub-confirm-ignore-html: "心当たりがない場合はこのメールを無視するか、%{link}アドレスを削除%{end}してください。"
+mail-sub-welcome-subject: "%{product} の更新情報を購読しました"
+mail-sub-welcome-intro: "リストに登録されました - %{product} の更新情報とニュースをこちらにお送りします。"
+mail-sub-welcome-out-text: "いつでも配信を停止できます:"
+mail-sub-welcome-out-html: "いつでも%{link}配信を停止%{end}できます。"
+
+# === mail: the footer of a mail to an account that is not about the account (Templates::welcome). %{article} is English's a/an ===
+mail-footer-why: "このメールは、%{product} アカウントを作成された方にお送りしています。"
+mail-footer-stop-text: "このようなメールの配信を停止するには: %{url}"
+mail-footer-stop-html: "%{link}このようなメールの配信を停止する%{end}。"
+
+# === mail: the owner's alert of a list signup, in the site's language (Templates::signup_notice) ===
+mail-signup-subject: "%{product} ニュースレターの新規登録: %{email}"
+mail-signup-intro: "%{email} が %{product} の更新情報を希望しています。"
+mail-signup-when: "日時"
+mail-signup-source: "登録元"
+mail-signup-address: "アドレス"
+mail-signup-referer: "リファラー"
+mail-signup-agent: "エージェント"
+mail-signup-unconfirmed: "未確認です - これは登録の申し込みで、ダブルオプトインではありません。"
+mail-signup-all: "すべての登録:"

@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
 # Copies the shared account UI into a Next.js app.
 #
-#   ./sync.sh ../../trust-atria-bo/dash
-#   ./sync.sh ../../qw-bo/dash
+#   ./sync.sh ../../my-site/dash
 #
-# Why a copy rather than a package dependency: the four sites live in four
-# separate GitHub repositories and deploy through Cloudflare Workers Builds,
+# Why a copy rather than a package dependency: the sites live in separate
+# GitHub repositories and deploy through Cloudflare Workers Builds,
 # which clones one repo and runs `npm install` inside it. A `file:` dependency
 # pointing outside that clone resolves locally and fails in CI, and nothing is
 # published to a registry. So each app carries real files that its own build
@@ -61,7 +60,7 @@ rsync -r "$SRC/lib/account-client.ts" "$TARGET/lib/account-client.ts"
 rsync -r "$SRC/lib/news-client.ts" "$TARGET/lib/news-client.ts"
 
 echo "synced account UI into $TARGET"
-echo "  app/account/{sign-in,sign-up,verify,forgot,reset,profile}"
+echo "  app/account/{sign-in,sign-up,verify,forgot,reset,profile,oauth/confirm,sso/finish,sso/test}"
 echo "  app/news/{confirm,unsubscribe}"
 echo "  components/account/  components/news/"
 echo "  lib/account-client.ts  lib/news-client.ts"

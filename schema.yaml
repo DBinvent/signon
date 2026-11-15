@@ -1,13 +1,12 @@
 # schema_guard schema for the shared user-management layer.
 #
-# Applied independently to each site database (dashta / registerta / qwbo /
-# dbinventbo) by `user_mgmt::migrate()` at startup — see DESIGN.md. Every site
+# Applied independently to each site database by `signon::migrate()` at startup — see DESIGN.md. Every site
 # runs the same schema; no identity is shared between them.
 #
 # NOTE on `description:` — schema_guard renders these into COMMENT ON
 # statements without escaping quotes, so an apostrophe here breaks the
-# generated SQL. Keep descriptions apostrophe-free (a real bug hit once
-# already, recorded in trust-atria-bo/bo-todo.md).
+# generated SQL. Keep descriptions apostrophe-free.
+
 database:
   - schema:
     schemaName: public
@@ -46,10 +45,12 @@ database:
             - column:
                 name: email
                 type: varchar(256)
-                constraint:
-                  nullable: false
                 sql: 'UNIQUE'
-                description: Always stored lowercased and trimmed. Enforced in application code, not a trigger, to keep this schema portable.
+                description: >-
+                  Always stored lowercased and trimmed. Enforced in application code, not a trigger, to keep this schema portable.
+                  NULL for an account with no address - made from a brokered sign-in whose provider gave none, or gave one it does not vouch for.
+                  Such an account has email_verified true (nothing is waiting to be confirmed) and can never be found by address.
+                  UNIQUE still holds - Postgres lets any number of NULLs through.
             - column:
                 name: password_hash
                 type: varchar(256)
@@ -92,6 +93,130 @@ database:
             - column:
                 name: last_login_at
                 type: timestamptz
+            - column:
+                name: last_login_ip
+                type: varchar(64)
+                description: Client address of the last sign-in - the visitor as the site Worker forwards it (CLIENT_IP_KEY), else the address the tunnel reports.
+            - column:
+                name: signup_ip
+                type: varchar(64)
+                description: Client address the account was created from. NULL on accounts older than this column.
+            - column:
+                name: emails_off_at
+                type: timestamptz
+                description: >-
+                  Set when the owner turned off non-essential mail (the welcome, news) - at sign-up, from a mailed unsubscribe link,
+                  or on the profile page. NULL means on. Account mail (verification, password reset, sign-in codes) goes out regardless.
+            - column:
+                name: unsubscribe_token
+                type: varchar(64)
+                sql: 'UNIQUE'
+                description: >-
+                  Behind the unsubscribe link in mail to this account. Stored in the clear for the same reason as
+                  subscribers.unsubscribe_token - a link has to keep working in mail sent long ago - and all it can do is turn that mail off.
+                  Minted on the first such mail.
+
+      - table:
+          tableName: user_browsers
+          description: >-
+            Which accounts a browser has created or signed in to, keyed by the hash of a long-lived per-site cookie (signon_browser).
+            Only used to ask before a second account is registered from the same browser - a nudge, not a security boundary,
+            since clearing cookies resets it.
+          columns:
+            - column:
+                name: mark_hash
+                type: varchar(64)
+                constraint:
+                  primaryKey: true
+                  nullable: false
+                description: sha256 hex of the cookie value.
+            - column:
+                name: user_id
+                type: uuid
+                constraint:
+                  primaryKey: true
+                  nullable: false
+                  foreignKey:
+                    references: users
+                index: true
+            - column:
+                name: created_at
+                type: timestamptz
+                constraint:
+                  nullable: false
+                defaultValue: now()
+            - column:
+                name: last_seen_at
+                type: timestamptz
+                constraint:
+                  nullable: false
+                defaultValue: now()
+
+      - table:
+          tableName: mail_log
+          description: >-
+            The internal send log of non-essential mail to an account - one row per account per kind (welcome, followup).
+            Claimed (status sending) in the statement that finds it owed, then marked sent or failed with the reason.
+            A failed send may be tried again, a sent one never - so a kind reaches each account at most once.
+            It is how the catch-up welcome and the follow-up find who they are owed to. Shown to nobody.
+          constraint: 'UNIQUE (user_id, kind)'
+          columns:
+            - column:
+                name: id
+                type: bigserial
+                constraint:
+                  primaryKey: true
+                  nullable: false
+            - column:
+                name: user_id
+                type: uuid
+                constraint:
+                  nullable: false
+                  foreignKey:
+                    references: users
+                index: true
+            - column:
+                name: kind
+                type: varchar(32)
+                constraint:
+                  nullable: false
+                description: welcome or followup.
+            - column:
+                name: status
+                type: varchar(16)
+                constraint:
+                  nullable: false
+                description: sending, sent or failed.
+            - column:
+                name: email
+                type: varchar(256)
+                description: The address it went to, as it was then.
+            - column:
+                name: subject
+                type: varchar(256)
+            - column:
+                name: error
+                type: varchar(512)
+                description: Why the last attempt failed - from the mail relay, never a credential.
+            - column:
+                name: attempts
+                type: int
+                constraint:
+                  nullable: false
+                defaultValue: "1"
+            - column:
+                name: created_at
+                type: timestamptz
+                constraint:
+                  nullable: false
+                defaultValue: now()
+            - column:
+                name: updated_at
+                type: timestamptz
+                constraint:
+                  nullable: false
+                defaultValue: now()
+                description: The last status change - for a sent row, when it went; what the follow-up delay counts from.
 
       - table:
           tableName: user_identities
@@ -128,6 +253,11 @@ database:
                 name: email
                 type: varchar(256)
                 description: Address the provider reported at link time, kept for audit only. The authoritative address is users.email.
+            - column:
+                name: connection_id
+                type: uuid
+                index: true
+                description: Set only for provider sso - the customer connection this identity came through. provider_user_id is then connection_id colon subject, so two IdPs can never collide on a subject.
             - column:
                 name: created_at
                 type: timestamptz
@@ -223,6 +353,11 @@ database:
                 type: timestamptz
                 constraint:
                   nullable: false
+            - column:
+                name: via
+                type: varchar(64)
+                index: true
+                description: How the session was established - password, verify, reset, oauth colon provider, sso colon connection id. Lets a connection be suspended by deleting exactly the sessions it minted. Null on rows older than the column.
 
       - table:
           tableName: roles
@@ -316,6 +451,10 @@ database:
                 name: user_agent
                 type: varchar(256)
             - column:
+                name: via
+                type: varchar(64)
+                description: For sign-in events - which route in, as in sessions.via (oauth colon provider, sso colon connection id). Lets an admin count sign-ins per provider.
+            - column:
                 name: created_at
                 type: timestamptz
                 constraint:
@@ -356,6 +495,108 @@ database:
                 type: varchar(512)
                 description: Site relative path to send the browser to after a successful callback. Validated to start with a single slash.
             - column:
+                name: nonce
+                type: varchar(64)
+                description: OIDC nonce sent on the authorize request and required back in the id_token. For SAML, the AuthnRequest ID required back as InResponseTo.
+            - column:
+                name: created_at
+                type: timestamptz
+                constraint:
+                  nullable: false
+                defaultValue: now()
+
+      - table:
+          tableName: pending_identities
+          description: >-
+            A provider sign-in that cannot finish yet - either the address still has to be proven with a mailed code (Amazon, Facebook,
+            in-process only), or the person is being asked whether to create a profile (email_proven). Keyed by the hash of a token
+            handed to the browser. Swept after an hour.
+          columns:
+            - column:
+                name: token_hash
+                type: varchar(64)
+                constraint:
+                  primaryKey: true
+                  nullable: false
+                description: sha256 hex of the token in the confirm page URL.
+            - column:
+                name: provider
+                type: varchar(32)
+                constraint:
+                  nullable: false
+            - column:
+                name: provider_user_id
+                type: varchar(190)
+                constraint:
+                  nullable: false
+            - column:
+                name: email
+                type: varchar(256)
+                description: Lowercased. Null until known - Facebook omits it for phone-registered accounts, and the user types one in.
+            - column:
+                name: display_name
+                type: varchar(256)
+            - column:
+                name: code
+                type: varchar(10)
+                description: The six digit code mailed to email. Only ever matched inside the guarded UPDATE that spends it.
+            - column:
+                name: code_sent_at
+                type: timestamptz
+            - column:
+                name: attempts
+                type: int
+                constraint:
+                  nullable: false
+                defaultValue: '0'
+            - column:
+                name: redirect_to
+                type: varchar(512)
+            - column:
+                name: email_proven
+                type: bool
+                constraint:
+                  nullable: false
+                defaultValue: "false"
+                description: >-
+                  The row is a Create profile question, not a code step. email, when set, is the address the profile gets and is proven
+                  (a vouching provider, a verified customer domain, an address typed inside one, or the code). NULL email on such a row
+                  means the profile is created with no address.
+            - column:
+                name: email_typed
+                type: bool
+                constraint:
+                  nullable: false
+                defaultValue: "false"
+                description: >-
+                  A customer SSO sign-in whose IdP reported no address - email is the one the person typed, inside a verified domain of
+                  the connection. Creates a profile at that address, but never enters an existing one.
+            - column:
+                name: identity_email
+                type: varchar(256)
+                description: >-
+                  The address a provider reported without vouching for it. Recorded on the linked identity for display only, never on
+                  users.email.
+            - column:
+                name: connection_id
+                type: uuid
+                description: For a sign-in through a customer SSO connection.
+            - column:
+                name: connection_owner
+                type: uuid
+                description: The connection owner in the dash database, passed to the site hook for JIT team membership. Not a foreign key - it lives in another service.
+            - column:
+                name: via
+                type: varchar(64)
+                description: sessions.via for the session this sign-in ends in.
+            - column:
+                name: label
+                type: varchar(128)
+                description: What the person signed in with, as shown to them - Google, or the customer connection name.
+            - column:
+                name: session_max_hours
+                type: int
+            - column:
                 name: created_at
                 type: timestamptz
                 constraint:
@@ -367,8 +608,8 @@ database:
           description: |
             Mailing list for product updates and news. Entirely separate from users — subscribing is not
             registering, and an account holder is not on this list unless they asked to be.
-            Ported from the trust-atria-landing waitlist, which stores the same thing in Cloudflare D1;
-            here it lives in the home Postgres alongside everything else.
+            Ported from a waitlist of a landing site, which stores the same thing in Cloudflare D1;
+            here it lives in Postgres alongside everything else.
           columns:
             - column:
                 name: id

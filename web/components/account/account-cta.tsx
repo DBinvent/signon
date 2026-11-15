@@ -1,17 +1,20 @@
 // The one piece of account UI that belongs on a site's own landing page:
 // "sign in / create account" when signed out, "you are signed in" when not.
+// `extra` is a site's own buttons, placed in the same row as the account
+// buttons so they line up — beside a column it would float between the
+// "Signed in as" line and the button.
 //
 // Generated file — the source of truth is
-// ../../user_mgmt/web/components/account/account-cta.tsx. Edit it there and
-// re-run `user_mgmt/web/sync.sh <this-app>`.
+// ../../signon/web/components/account/account-cta.tsx. Edit it there and
+// re-run `signon/web/sync.sh <this-app>`.
 
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import Link from 'next/link'
 import { account, type Account } from '@/lib/account-client'
 
-export function AccountCta() {
+export function AccountCta({ extra }: { extra?: ReactNode } = {}) {
   // `undefined` is "still asking", distinct from `null` for "signed out" —
   // without the distinction the page flashes the signed-out buttons on every
   // load for a user who is in fact signed in.
@@ -33,22 +36,26 @@ export function AccountCta() {
   }, [])
 
   if (me === undefined) {
-    return <div className="h-10" aria-hidden />
+    return <div className="flex h-10 items-center justify-center gap-3">{extra}</div>
   }
 
   if (me) {
     return (
       <div className="flex flex-col items-center gap-2">
         <p className="text-sm text-muted-foreground">
-          Signed in as <span className="text-foreground">{me.display_name ?? me.email}</span>
+          Signed in as{' '}
+          <span className="text-foreground">{me.display_name ?? me.email ?? 'an account with no email'}</span>
         </p>
-        <Link
-          href="/account/profile"
-          className="rounded-md border border-border px-4 py-2 text-sm font-medium transition
-                     hover:bg-accent hover:text-accent-foreground"
-        >
-          Your account
-        </Link>
+        <div className="flex flex-wrap items-center justify-center gap-3">
+          <Link
+            href="/account/profile"
+            className="rounded-md border border-border px-4 py-2 text-sm font-medium transition
+                       hover:bg-accent hover:text-accent-foreground"
+          >
+            Your account
+          </Link>
+          {extra}
+        </div>
       </div>
     )
   }
@@ -69,6 +76,7 @@ export function AccountCta() {
       >
         Sign in
       </Link>
+      {extra}
     </div>
   )
 }

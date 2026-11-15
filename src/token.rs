@@ -34,6 +34,14 @@ pub fn hash(value: &str) -> String {
     out
 }
 
+/// Equality that takes the same time wherever the inputs differ — for
+/// comparing a presented shared secret (`CLIENT_IP_KEY`). Both sides are
+/// hashed first, so the length of the real one does not leak either.
+pub fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    let (a, b) = (Sha256::digest(a), Sha256::digest(b));
+    a.iter().zip(b.iter()).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+}
+
 /// Six digits, uniformly drawn — the type-it-in confirmation code.
 ///
 /// Rejection sampling rather than `% 1_000_000` so the low values are not
@@ -58,9 +66,14 @@ mod tests {
     fn hash_is_64_hex_chars() {
         let h = hash("abc");
         assert_eq!(h.len(), 64);
-        assert!(h.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
+        assert!(h
+            .chars()
+            .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
         // Known vector, so a future change of hash function is caught here.
-        assert_eq!(h, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+        assert_eq!(
+            h,
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
     }
 
     #[test]
@@ -69,7 +82,9 @@ mod tests {
         let b = secret();
         assert_ne!(a, b);
         assert_eq!(a.len(), 43);
-        assert!(a.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'));
+        assert!(a
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'));
     }
 
     #[test]
@@ -80,5 +95,4 @@ mod tests {
             assert!(c.chars().all(|c| c.is_ascii_digit()));
         }
     }
-
 }

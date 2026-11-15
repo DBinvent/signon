@@ -2,8 +2,8 @@
 // and where you are signed in.
 //
 // Generated file — the source of truth is
-// ../../user_mgmt/web/components/account/account-panel.tsx. Edit it there and
-// re-run `user_mgmt/web/sync.sh <this-app>`.
+// ../../signon/web/components/account/account-panel.tsx. Edit it there and
+// re-run `signon/web/sync.sh <this-app>`.
 
 'use client'
 
@@ -18,7 +18,28 @@ import {
   type Provider,
   type SessionInfo,
 } from '@/lib/account-client'
-import { Field, Notice, SubmitButton, TextLink } from './ui'
+import { Checkbox, Field, Notice, SubmitButton, TextLink } from './ui'
+
+/**
+ * How an identity's provider key reads on screen. The server's own names
+ * cover only the providers configured right now — an identity can outlive
+ * its provider's credentials — and "sso", a customer's own IdP, is never in
+ * that list at all.
+ */
+const PROVIDER_NAMES: Record<string, string> = {
+  apple: 'Apple',
+  amazon: 'Amazon',
+  google: 'Google',
+  facebook: 'Facebook',
+  linkedin: 'LinkedIn',
+  github: 'GitHub',
+  microsoft: 'Microsoft',
+  sso: 'Organization SSO',
+}
+
+function providerName(key: string, configured: Provider[]): string {
+  return PROVIDER_NAMES[key] ?? configured.find((p) => p.key === key)?.name ?? key
+}
 
 export function AccountPanel() {
   const router = useRouter()
@@ -61,7 +82,10 @@ export function AccountPanel() {
       <section className="rounded-xl border border-border bg-card p-6">
         <h2 className="text-lg font-semibold tracking-tight">Account</h2>
         <dl className="mt-4 space-y-2 text-sm">
-          <Row label="Email" value={me.email} />
+          <Row
+            label="Email"
+            value={me.email ?? <span className="text-muted-foreground">no email</span>}
+          />
           <Row label="Name" value={me.display_name ?? '—'} />
           <Row label="Roles" value={me.roles.length ? me.roles.join(', ') : '—'} />
         </dl>
@@ -80,7 +104,21 @@ export function AccountPanel() {
         </div>
       </section>
 
-      <PasswordSection hasPassword={me.has_password} email={me.email} />
+      {me.email ? <EmailsSection enabled={me.emails_enabled} /> : null}
+
+      {me.email ? (
+        <PasswordSection hasPassword={me.has_password} email={me.email} />
+      ) : (
+        // Password sign-in is by address, so there is nothing a password on
+        // this account could ever be used for — the server refuses one too.
+        <section className="rounded-xl border border-border bg-card p-6">
+          <h2 className="text-lg font-semibold tracking-tight">Password</h2>
+          <p className="mt-1.5 text-sm text-muted-foreground">
+            This account has no email address, so it signs in only through its connected accounts
+            below and cannot have a password.
+          </p>
+        </section>
+      )}
 
       <section className="rounded-xl border border-border bg-card p-6">
         <h2 className="text-lg font-semibold tracking-tight">Connected accounts</h2>
@@ -91,9 +129,11 @@ export function AccountPanel() {
         ) : (
           <>
             <ul className="mt-4 space-y-2 text-sm">
-              {me.identities.map((identity) => (
-                <li key={identity.provider} className="flex items-center justify-between gap-4">
-                  <span className="capitalize">{identity.provider}</span>
+              {me.identities.map((identity, i) => (
+                // Not keyed by provider alone: two organizations' SSO are two
+                // "sso" identities.
+                <li key={`${identity.provider}-${i}`} className="flex items-center justify-between gap-4">
+                  <span>{providerName(identity.provider, providers)}</span>
                   <span className="text-muted-foreground">{identity.email ?? 'linked'}</span>
                 </li>
               ))}
@@ -109,7 +149,8 @@ export function AccountPanel() {
                     type="button"
                     // Starting the flow while signed in links the provider to
                     // this account instead of creating a second one — the
-                    // server reads the session and records link_user_id.
+                    // server reads the session (in-process: at start, as
+                    // link_user_id; federated: at /sso/finish).
                     onClick={() => account.startOauth(provider, '/account/profile')}
                     className="rounded-md border border-border px-3 py-1.5 text-sm transition
                                hover:bg-accent hover:text-accent-foreground"
@@ -132,12 +173,53 @@ export function AccountPanel() {
   )
 }
 
-function Row({ label, value }: { label: string; value: string }) {
+function Row({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <div className="flex items-baseline justify-between gap-4">
       <dt className="text-muted-foreground">{label}</dt>
       <dd className="text-right">{value}</dd>
     </div>
+  )
+}
+
+/**
+ * The welcome and news, on or off — the same switch the sign-up box and every
+ * mailed unsubscribe link set. Account mail (confirmations, password resets)
+ * is not affected; it is the account working, not news.
+ */
+function EmailsSection({ enabled: initial }: { enabled: boolean }) {
+  const [enabled, setEnabled] = useState(initial)
+  const [pending, setPending] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  async function toggle(next: boolean) {
+    setPending(true)
+    setError(null)
+    try {
+      const { emails_enabled } = await account.setEmails(next)
+      setEnabled(emails_enabled)
+    } catch (err) {
+      setError(err instanceof AccountError ? err.message : 'Could not save that. Try again.')
+    } finally {
+      setPending(false)
+    }
+  }
+
+  return (
+    <section className="rounded-xl border border-border bg-card p-6">
+      <h2 className="text-lg font-semibold tracking-tight">Emails</h2>
+      <div className="mt-4 space-y-3">
+        {error ? <Notice kind="error">{error}</Notice> : null}
+        <Checkbox
+          name="emails"
+          label="Product news and tips"
+          hint="Account emails — address confirmations, password resets — are always sent."
+          checked={enabled}
+          onChange={(e) => toggle(e.target.checked)}
+          disabled={pending}
+        />
+      </div>
+    </section>
   )
 }
 

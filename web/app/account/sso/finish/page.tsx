@@ -1,0 +1,21 @@
+// Generated file — the source of truth is
+// ../../../../../signon/web/app/account/sso/finish/page.tsx. Edit it there
+// and re-run `signon/web/sync.sh <this-app>`.
+//
+// A Suspense boundary is not optional here: these screens read the query
+// string with useSearchParams, and `output: 'export'` refuses to prerender a
+// page that does so outside one.
+
+import { Suspense } from 'react'
+import type { Metadata } from 'next'
+import { SsoFinishPanel } from '@/components/account/sso-finish-panel'
+
+export const metadata: Metadata = { title: 'Finish signing in' }
+
+export default function Page() {
+  return (
+    <Suspense fallback={<p className="p-6 text-sm text-muted-foreground">Loading…</p>}>
+      <SsoFinishPanel />
+    </Suspense>
+  )
+}

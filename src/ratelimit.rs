@@ -1,8 +1,8 @@
 //! In-process sliding-window rate limiting.
 //!
-//! Scope, stated plainly: this counts within one process. Every one of the
-//! four services is a single instance behind a tunnel, so that is the whole
-//! population today — but if any of them is ever run as more than one
+//! Scope, stated plainly: this counts within one process. A service that is a
+//! single instance behind its proxy has that as its whole
+//! population - but if one is ever run as more than one
 //! process, this becomes per-process and the effective limit multiplies.
 //! Moving the counters to Postgres or Redis is the fix at that point; nothing
 //! else in the crate has to change, since only [`RateLimiter::check`] is
@@ -39,7 +39,10 @@ impl Default for RateLimiter {
 impl RateLimiter {
     pub fn new() -> Self {
         Self {
-            inner: Mutex::new(Inner { hits: HashMap::new(), calls_since_sweep: 0 }),
+            inner: Mutex::new(Inner {
+                hits: HashMap::new(),
+                calls_since_sweep: 0,
+            }),
         }
     }
 
@@ -108,6 +111,9 @@ mod tests {
         assert!(rl.check("a", 1, window));
         assert!(!rl.check("a", 1, window));
         std::thread::sleep(Duration::from_millis(45));
-        assert!(rl.check("a", 1, window), "the earlier hit should have aged out");
+        assert!(
+            rl.check("a", 1, window),
+            "the earlier hit should have aged out"
+        );
     }
 }

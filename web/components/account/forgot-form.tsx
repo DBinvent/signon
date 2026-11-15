@@ -1,8 +1,8 @@
 // Password reset, step one: ask for the link.
 //
 // Generated file — the source of truth is
-// ../../user_mgmt/web/components/account/forgot-form.tsx. Edit it there and
-// re-run `user_mgmt/web/sync.sh <this-app>`.
+// ../../signon/web/components/account/forgot-form.tsx. Edit it there and
+// re-run `signon/web/sync.sh <this-app>`.
 
 'use client'
 

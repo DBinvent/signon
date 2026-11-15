@@ -12,19 +12,21 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use axum_extra::extract::cookie::CookieJar;
-use serde_json::json;
 use uuid::Uuid;
 
 use crate::{db, token, AccountState};
 
 /// Cookie carrying the session token. Not the session id — the id is a stable
 /// handle for revocation, the token is the secret (see `token.rs`).
-pub const SESSION_COOKIE: &str = "um_session";
+pub const SESSION_COOKIE: &str = "signon_session";
 
 #[derive(Debug, Clone)]
 pub struct CurrentUser {
     pub id: Uuid,
-    pub email: String,
+    /// `None` for an account with no address — made from a brokered sign-in
+    /// whose provider gave none, or gave one it does not vouch for. Nothing
+    /// keyed by address (invites, mail, enforcement) applies to it.
+    pub email: Option<String>,
     pub display_name: Option<String>,
     pub email_verified: bool,
     pub roles: Vec<String>,
@@ -43,7 +45,7 @@ impl CurrentUser {
         if self.has_role(role) {
             Ok(())
         } else {
-            Err((StatusCode::FORBIDDEN, Json(json!({ "error": "forbidden" }))).into_response())
+            Err((StatusCode::FORBIDDEN, Json(crate::i18n::error_body("err-forbidden", &[]))).into_response())
         }
     }
 }
@@ -54,7 +56,11 @@ pub struct AuthRejection;
 
 impl IntoResponse for AuthRejection {
     fn into_response(self) -> Response {
-        (StatusCode::UNAUTHORIZED, Json(json!({ "error": "invalid credentials" }))).into_response()
+        (
+            StatusCode::UNAUTHORIZED,
+            Json(crate::i18n::error_body("err-credentials", &[])),
+        )
+            .into_response()
     }
 }
 
@@ -86,6 +92,8 @@ where
     };
 
     // A session that outlived its account`s good standing is not a session.
+    // An account with no address has `email_verified` true: there is nothing
+    // waiting to be confirmed (`db::create_user_without_email`).
     if user.suspended || !user.email_verified {
         return None;
     }
@@ -226,6 +234,9 @@ mod tests {
             .body(())
             .unwrap()
             .into_parts();
-        assert_eq!(RequestMeta::from_parts(&parts).ip.as_deref(), Some("198.51.100.9"));
+        assert_eq!(
+            RequestMeta::from_parts(&parts).ip.as_deref(),
+            Some("198.51.100.9")
+        );
     }
 }

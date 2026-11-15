@@ -1,22 +1,21 @@
-//! Shared user management for the four backoffice sites (dash-ta, register-ta,
-//! dash-qw, dash-db).
+//! Shared user management for web back offices.
 //!
 //! Each site owns its own database and mounts the same router:
 //!
 //! ```no_run
 //! # async fn wire() -> anyhow::Result<()> {
-//! let db_url = "postgres:///qwbo?host=/var/run/postgresql&user=qwbo";
-//! user_mgmt::migrate(db_url).await?;
+//! let db_url = "postgres:///mysite?host=/var/run/postgresql&user=mysite";
+//! signon::migrate(db_url).await?;
 //!
 //! let pool = sqlx::postgres::PgPoolOptions::new()
 //!     .max_connections(5)
 //!     .connect(db_url)
 //!     .await?;
 //!
-//! let config = user_mgmt::Config::new("QW", "https://dash.knownby.work").with_env();
-//! let state = user_mgmt::AccountState::from_env(pool, config).await?;
+//! let config = signon::Config::new("Acme", "https://dash.example.com").with_env();
+//! let state = signon::AccountState::from_env(pool, config).await?;
 //!
-//! let app = axum::Router::new().nest("/account", user_mgmt::router(state));
+//! let app = axum::Router::new().nest("/account", signon::router(state));
 //! # Ok(())
 //! # }
 //! ```
@@ -25,6 +24,15 @@
 //! deliberately not taken from, the three implementations that came before —
 //! is in `DESIGN.md`.
 
+// The crypto backend of jsonwebtoken: one, named by a feature (Cargo.toml). With neither, a token operation
+// would panic at run time - said here, at build time, instead.
+#[cfg(all(feature = "oauth", not(any(feature = "jwt-rust-crypto", feature = "jwt-aws-lc"))))]
+compile_error!("signon: feature `oauth` needs a jsonwebtoken backend: `jwt-rust-crypto` (the default) or `jwt-aws-lc`");
+
+// [i18n] the messages of locales/*.yml, compiled in; a language without one is English
+rust_i18n::i18n!("locales", fallback = "en");
+
+mod account_mail;
 mod config;
 mod current_user;
 mod db;
@@ -33,21 +41,51 @@ mod password;
 mod ratelimit;
 mod routes;
 mod subscribe;
-mod token;
+pub mod i18n;
+pub mod token;
 
 #[cfg(feature = "oauth")]
+pub mod jwt;
+#[cfg(feature = "oauth")]
 pub mod oauth;
+#[cfg(feature = "oauth")]
+pub mod sso;
+#[cfg(feature = "sso")]
+pub mod oidc;
+#[cfg(feature = "saml")]
+mod c14n;
+#[cfg(feature = "saml")]
+pub mod saml;
+#[cfg(feature = "sso-broker")]
+pub mod broker;
+#[cfg(feature = "notify")]
+pub mod notify;
+#[cfg(all(test, feature = "oauth"))]
+mod flow_tests;
+#[cfg(feature = "test-support")]
+pub mod testing;
+// the private keys the tests sign with: made on first use, never in the repository
+#[cfg(all(feature = "oauth", any(test, feature = "test-support")))]
+mod fixture_keys;
+
+/// `Pin<Box<dyn Future>>`, spelled out so this crate needs no `async-trait`
+/// for its hook traits.
+pub type BoxFut<'a, T> = std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send + 'a>>;
 
 use std::sync::Arc;
 
 use axum::Router;
 use sqlx::PgPool;
 
-pub use config::Config;
+pub use account_mail::mail_admin_router;
+pub use config::{Config, FooterNote, Welcome};
 pub use current_user::{AuthRejection, CurrentUser, OptionalUser, RequestMeta, SESSION_COOKIE};
 pub use email::Mailer;
-pub use password::{check_policy, PolicyError, MAX_LEN as PASSWORD_MAX_LEN, MIN_LEN as PASSWORD_MIN_LEN};
+pub use password::{
+    check_policy, PolicyError, MAX_LEN as PASSWORD_MAX_LEN, MIN_LEN as PASSWORD_MIN_LEN,
+};
 pub use ratelimit::RateLimiter;
+pub use routes::request_language;
 
 /// State shared by every `/account/*` handler.
 ///
@@ -59,8 +97,17 @@ pub struct AccountState {
     pub mailer: Arc<Mailer>,
     pub config: Arc<Config>,
     pub limiter: Arc<RateLimiter>,
+    /// Social providers this site signs in with *in-process*. Starts from
+    /// the environment; replaceable at runtime ([`sso::SsoRegistry`]).
     #[cfg(feature = "oauth")]
-    pub oauth: Arc<Vec<oauth::Configured>>,
+    pub sso: Arc<sso::SsoRegistry>,
+    /// Set when sign-in is federated through a separate SSO service
+    /// (`broker.rs`). It then answers the provider list, discovery and
+    /// enforcement, and hands this site verified identities as tickets.
+    #[cfg(feature = "sso-broker")]
+    pub broker: Option<Arc<broker::BrokerClient>>,
+    #[cfg(feature = "sso-broker")]
+    pub broker_hooks: Arc<dyn broker::BrokerHooks>,
     /// For `routes::cross_verified`'s call to the sibling site — a short
     /// timeout so a slow or hung sibling cannot stall registration/resend.
     #[cfg(feature = "cross-verify")]
@@ -99,15 +146,18 @@ impl AccountState {
         db::seed_roles(&pool, &config.roles).await?;
 
         #[cfg(feature = "oauth")]
-        let oauth = {
+        let sso = {
             // Providers register their redirect URI against the public API
             // prefix, which is what the Worker forwards from — see
             // Config::api_base_url.
             let configured = oauth::from_env(&config.api_base_url());
             if configured.is_empty() {
-                tracing::info!("no OAuth providers configured — SSO buttons will not be offered");
+                tracing::info!("no OAuth providers configured in the environment");
             }
-            Arc::new(configured)
+            Arc::new(sso::SsoRegistry::new(sso::SsoSnapshot {
+                providers: configured,
+                version: "env".to_string(),
+            }))
         };
 
         Ok(Self {
@@ -116,7 +166,11 @@ impl AccountState {
             config: Arc::new(config),
             limiter: Arc::new(RateLimiter::new()),
             #[cfg(feature = "oauth")]
-            oauth,
+            sso,
+            #[cfg(feature = "sso-broker")]
+            broker: None,
+            #[cfg(feature = "sso-broker")]
+            broker_hooks: Arc::new(broker::NoHooks),
             #[cfg(feature = "cross-verify")]
             http: reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(3))
@@ -131,11 +185,46 @@ impl AccountState {
         self.mailer = Arc::new(mailer);
         self
     }
+
+    /// Federates sign-in through a separate SSO service. Also turns on
+    /// "ask before creating a profile" — nobody gets an account from a
+    /// sign-in they did not confirm — and drops any providers this process
+    /// loaded itself (`OAUTH_*`), so the in-process `/oauth/{p}/start` path
+    /// cannot run beside the service and around its switches.
+    #[cfg(feature = "sso-broker")]
+    pub fn with_broker(mut self, client: broker::BrokerClient) -> Self {
+        let local = self.sso.current().providers.len();
+        if local > 0 {
+            tracing::warn!(providers = local, "OAUTH_* credentials ignored: sign-in is federated through the SSO service");
+            self.sso.replace(sso::SsoSnapshot::default());
+        }
+        self.broker = Some(Arc::new(client));
+        let mut config = (*self.config).clone();
+        config.ask_before_creating_profile = true;
+        self.config = Arc::new(config);
+        self
+    }
+
+    /// Plugs a service's own policy into a brokered SSO sign-in — dash's JIT
+    /// team membership. See [`broker::BrokerHooks`].
+    #[cfg(feature = "sso-broker")]
+    pub fn with_broker_hooks(mut self, hooks: Arc<dyn broker::BrokerHooks>) -> Self {
+        self.broker_hooks = hooks;
+        self
+    }
+
+    /// The environment's providers, as read at startup — what a service
+    /// that manages providers itself falls back to for any provider it has
+    /// no row for.
+    #[cfg(feature = "oauth")]
+    pub fn env_providers(&self) -> Vec<oauth::Configured> {
+        oauth::from_env(&self.config.api_base_url())
+    }
 }
 
 /// Mount at `/news` in the service`s own router: the updates-and-news
-/// mailing list, ported from `trust-atria-landing`'s D1 waitlist onto the
-/// home Postgres. Optional — a site that does not want a list simply does not
+/// mailing list, ported from a landing site's D1 waitlist onto the site's
+/// own Postgres. Optional - a site that does not want a list simply does not
 /// mount it, and the `subscribers` table stays empty.
 pub fn subscribe_router(state: AccountState) -> Router {
     subscribe::router(state)
@@ -161,19 +250,18 @@ const SCHEMA: &str = include_str!("../schema.yaml");
 /// the pool.
 ///
 /// Safe to run on every boot — `schema_guard` diffs against what is already
-/// there and only ever appends. Same mechanism `xpc_backend` and
-/// `trust-atria-bo` already use, in place of an ordered migration chain that
-/// four separate repos would have to keep in step.
+/// there and only ever appends. It stands in place of an ordered migration
+/// chain that several repos would have to keep in step.
 pub async fn migrate(db_url: &str) -> anyhow::Result<()> {
     let schema = schema_guard_tokio::load_schema_from_src(SCHEMA.to_string())
-        .map_err(|e| anyhow::anyhow!("parse user_mgmt schema.yaml: {e}"))?;
+        .map_err(|e| anyhow::anyhow!("parse signon schema.yaml: {e}"))?;
     schema_guard_tokio::migrate_opt(
         schema,
         db_url,
         &schema_guard_tokio::MigrationOptions::default(),
     )
     .await
-    .map_err(|e| anyhow::anyhow!("apply user_mgmt schema.yaml: {e}"))?;
+    .map_err(|e| anyhow::anyhow!("apply signon schema.yaml: {e}"))?;
     Ok(())
 }
 
@@ -208,6 +296,89 @@ pub async fn user_id_by_email(pool: &PgPool, email: &str) -> anyhow::Result<Opti
     Ok(db::find_user_by_email(pool, &email.trim().to_lowercase())
         .await?
         .map(|u| u.id))
+}
+
+/// The account behind a session cookie value, for a sibling service that
+/// was handed the cookie (an SSO service reads a site's session
+/// this way, over the internal API). `None` for an unknown, expired,
+/// unverified or suspended session — one answer. The address is `None` for
+/// an account that has none.
+pub async fn user_for_session_token(
+    pool: &PgPool,
+    session_token: &str,
+) -> anyhow::Result<Option<(uuid::Uuid, Option<String>, Option<String>)>> {
+    let Some((_session, user_id)) = db::touch_session(pool, &token::hash(session_token)).await? else {
+        return Ok(None);
+    };
+    Ok(db::find_user_by_id(pool, user_id)
+        .await?
+        .filter(|u| u.email_verified && !u.suspended)
+        .map(|u| (u.id, u.email, u.display_name)))
+}
+
+/// Deletes every session minted through `via` (`sso:<connection id>`, or
+/// `oauth:<provider>`). What suspending a connection or disabling a provider
+/// does to the people already signed in through it.
+pub async fn revoke_sessions_via(pool: &PgPool, via: &str) -> anyhow::Result<u64> {
+    db::delete_sessions_via(pool, via).await
+}
+
+/// Deletes the sessions of every account at `domain` except those minted
+/// through `keep_via` — what turning on SSO enforcement does.
+pub async fn revoke_sessions_for_domain_except(
+    pool: &PgPool,
+    domain: &str,
+    keep_via: &str,
+) -> anyhow::Result<u64> {
+    db::delete_sessions_for_domain_except_via(pool, domain, keep_via).await
+}
+
+/// Deletes every session of one account.
+pub async fn revoke_user_sessions(pool: &PgPool, user_id: uuid::Uuid) -> anyhow::Result<u64> {
+    db::delete_sessions_for_user(pool, user_id, None).await
+}
+
+/// Suspends or reinstates an account. A suspended account cannot sign in by
+/// any route, and its existing sessions stop resolving immediately.
+pub async fn set_user_suspended(
+    pool: &PgPool,
+    user_id: uuid::Uuid,
+    suspended: bool,
+) -> anyhow::Result<()> {
+    db::set_suspended(pool, user_id, suspended).await
+}
+
+pub use db::ConnectionUser;
+
+/// Accounts that have signed in through a customer connection.
+pub async fn users_for_connection(
+    pool: &PgPool,
+    connection_id: uuid::Uuid,
+) -> anyhow::Result<Vec<ConnectionUser>> {
+    db::users_for_connection(pool, connection_id).await
+}
+
+/// Whether an account holds an identity from this connection.
+pub async fn user_linked_to_connection(
+    pool: &PgPool,
+    user_id: uuid::Uuid,
+    connection_id: uuid::Uuid,
+) -> anyhow::Result<bool> {
+    db::user_linked_to_connection(pool, user_id, connection_id).await
+}
+
+/// Accounts linked through `connection_id` with this address.
+pub async fn user_ids_for_connection_email(
+    pool: &PgPool,
+    connection_id: uuid::Uuid,
+    email: &str,
+) -> anyhow::Result<Vec<uuid::Uuid>> {
+    db::user_ids_for_connection_email(pool, connection_id, &email.trim().to_lowercase()).await
+}
+
+/// Removes every identity a deleted connection created. The accounts stay.
+pub async fn unlink_connection(pool: &PgPool, connection_id: uuid::Uuid) -> anyhow::Result<u64> {
+    db::unlink_connection(pool, connection_id).await
 }
 
 /// Whether `email` has a verified account in *this* service's own database.

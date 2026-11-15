@@ -1,10 +1,10 @@
 // "Get updates and news" signup.
 //
 // Generated file — the source of truth is
-// ../../user_mgmt/web/components/news/subscribe-form.tsx. Edit it there and
-// re-run `user_mgmt/web/sync.sh <this-app>`.
+// ../../signon/web/components/news/subscribe-form.tsx. Edit it there and
+// re-run `signon/web/sync.sh <this-app>`.
 //
-// Shape follows trust-atria-landing's WaitlistFooter: one field, one button,
+// Shape follows a landing site's waitlist footer: one field, one button,
 // the form replaced by a confirmation on success. What differs is what the
 // confirmation *says* — this list is double opt-in, so the address is not
 // subscribed until the emailed link is clicked, and telling someone they are

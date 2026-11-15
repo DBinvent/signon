@@ -1,26 +1,69 @@
 [package]
-name = "user_mgmt"
-version = "0.1.0"
+name = "signon"
+version = "1.0.0"
 edition = "2021"
-license = "UNLICENSED"
-description = "Shared user management for the DBI/TA/QW backoffices: registration, email verification, login sessions, password reset and OAuth2 SSO"
+description = "Shared user management for the your backoffices: registration, email verification, login sessions, password reset and OAuth2 SSO"
 readme = "README.md"
 
+authors = ["Vladimir Krinitsyn <v.krinitsyn@gmail.com>", "DBinvent <support@dbinvent.com>"]
+license = "MIT"
+repository = "https://github.com/vkrinitsyn/signon.git"
+homepage = "https://www.dbinvent.com/"
+documentation = "https://www.dbinvent.com/cluster"
+keywords = ["oauth2"]
+
+
 [lib]
-name = "user_mgmt"
+name = "signon"
 path = "src/lib.rs"
 
 [features]
-default = ["oauth"]
+default = ["oauth", "cloudflare-email", "jwt-rust-crypto"]
 # SSO (GitHub / LinkedIn / Google). Off means no reqwest, no outbound HTTP at
 # all — a site that only wants email+password does not pay for it.
-oauth = ["dep:reqwest", "dep:urlencoding"]
+oauth = ["dep:reqwest", "dep:urlencoding", "dep:jsonwebtoken"]
+# The crypto backend of jsonwebtoken, for `oauth`: exactly one of the two.
+# `jwt-rust-crypto` is the default: pure Rust, so no C toolchain is needed by
+# a consuming repo. A service whose own jsonwebtoken is on aws-lc-rs takes
+# `jwt-aws-lc` in its place (with `default-features = false`): with both in
+# one build jsonwebtoken picks neither, and every token operation panics.
+jwt-rust-crypto = ["jsonwebtoken?/rust_crypto"]
+jwt-aws-lc = ["jsonwebtoken?/aws_lc_rs"]
+# Libraries only, no routes: a generic OIDC relying party (`oidc.rs`) for
+# customer IdPs. For an SSO service that runs customer connections.
+sso = ["oauth"]
+# SAML 2.0 service-provider library on top of `sso`: a pure-Rust XML-DSig
+# verifier (exclusive C14N + RSA-SHA256) — see `saml.rs` for what it accepts
+# and why it is deliberately narrow.
+saml = ["sso", "dep:quick-xml", "dep:flate2", "dep:ring", "dep:x509-parser"]
+# Sign-in federated through a separate SSO service: the provider list,
+# discovery and enforcement come from it, and it hands this site verified
+# identities as one-time tickets (`broker.rs`). What dash and register run.
+sso-broker = ["oauth"]
 # Cross-site "is this email already verified elsewhere?" check — see
 # config::Config::cross_verify_url and routes::cross_verified. Independent
 # of `oauth`: a deployment can want one without the other. Shares the same
 # optional `reqwest` dep (Cargo unions feature -> dep edges, so enabling
 # both does not link reqwest twice).
 cross-verify = ["dep:reqwest"]
+# The Cloudflare Email Sending arm of the mailer (EMAIL_PROVIDER=cloudflare,
+# a REST API, so it needs reqwest). Default on; without it the mailer is SMTP
+# only and refuses EMAIL_PROVIDER=cloudflare.
+cloudflare-email = ["dep:reqwest"]
+# The welcome's text from a URL at send time (Config::welcome_url,
+# WELCOME_TEMPLATE_URL) - a site edits it on an admin page of its own -
+# falling back to the built-in Config::welcome whenever that URL has
+# nothing to say. Shares the optional reqwest dep, like cross-verify.
+welcome-remote = ["dep:reqwest"]
+# Messages to people and channels (`notify.rs`): Slack, Teams, Telegram, a generic
+# webhook, and email through the mailer. A library, no routes; each channel is one
+# HTTP POST, so it shares the optional reqwest dep. Off by default.
+notify = ["dep:reqwest"]
+# Fixed-key signers for other crates' tests (`testing.rs`): id_tokens a mock
+# IdP can hand out, and with `saml` a signed SAML Response. Only ever enable
+# it from a `[dev-dependencies]` entry — the keys are test keys, made by
+# `openssl` on the machine that runs the tests and never in this repository.
+test-support = ["oauth"]
 
 [dependencies]
 axum = "0.8"
@@ -40,7 +83,7 @@ sqlx = { version = "0.8", default-features = false, features = [
     "chrono",
     # Only for `#[derive(FromRow)]`. The compile-time-checked `query!` macros
     # are deliberately unused — they need a live database or a checked-in
-    # `.sqlx` cache at build time, which four consuming repos would each have
+    # `.sqlx` cache at build time, which every consuming repo would have
     # to maintain.
     "macros",
 ] }
@@ -51,7 +94,9 @@ lettre = { version = "0.11", default-features = false, features = [
     "builder",
 ] }
 time = "0.3"
-schema_guard_tokio = "1.10"
+schema_guard_tokio = "2.3"
+# The messages in six languages (locales/*.yml, src/i18n.rs): the API's error texts and the mail
+rust-i18n = "4"
 sha2 = "0.10"
 base64 = "0.22"
 reqwest = { version = "0.12", default-features = false, features = [
@@ -59,9 +104,21 @@ reqwest = { version = "0.12", default-features = false, features = [
     "rustls-tls",
 ], optional = true }
 urlencoding = { version = "2", optional = true }
+# `id_token` validation against a provider JWKS (Apple, custom OIDC) and the
+# ES256 client-secret JWT Apple requires. Its crypto backend is a feature of
+# this crate: `jwt-rust-crypto` (default) or `jwt-aws-lc`.
+jsonwebtoken = { version = "11", default-features = false, features = [
+    "use_pem",
+], optional = true }
+quick-xml = { version = "0.38", optional = true }
+flate2 = { version = "1", optional = true }
+ring = { version = "0.17", optional = true }
+x509-parser = { version = "0.18", optional = true }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }
+# Drives the router in-process in the flow tests (`src/flow_tests.rs`).
+tower = { version = "0.5", features = ["util"] }
 # For the examples only: the library deliberately does not pull in a
 # subscriber, but `send` reports its outcome through `tracing`, so an example
 # that says "check the log" has to install one.

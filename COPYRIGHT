@@ -1,0 +1,6 @@
+signon - shared user management for web back offices: registration, email
+verification, login sessions, password reset, and OAuth2, OIDC and SAML sign-in.
+
+Copyright (c) 2026 DBinvent
+
+Licensed under the MIT license, as Cargo.toml declares.

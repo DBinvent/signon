@@ -1,8 +1,8 @@
 // Password reset, step two: choose the new password.
 //
 // Generated file — the source of truth is
-// ../../user_mgmt/web/components/account/reset-form.tsx. Edit it there and
-// re-run `user_mgmt/web/sync.sh <this-app>`.
+// ../../signon/web/components/account/reset-form.tsx. Edit it there and
+// re-run `signon/web/sync.sh <this-app>`.
 
 'use client'
 

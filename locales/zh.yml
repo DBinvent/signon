@@ -1,0 +1,103 @@
+_version: 1
+# [i18n] signon's messages in Simplified Chinese: one file per language (en, and - written with the code, not
+# reviewed by a native speaker - ru, fr, de, zh, ja), every key in each. An error's message starts with its
+# code, SO-Ennn, the same in every language (src/i18n.rs tests it): the API answers the code beside the
+# text, so a client can act on it whatever the language. %{name} is filled in by the code.
+
+# === the API's errors: `{"error": <the text>, "code": <the code>}` (src/routes.rs, current_user.rs, broker.rs, subscribe.rs, account_mail.rs) ===
+err-credentials: "SO-E001 凭据无效"
+err-too-many: "SO-E002 请求过多，请稍后再试"
+err-internal: "SO-E003 内部错误"
+err-mail-unavailable: "SO-E004 邮件发送暂不可用，请稍后再试"
+err-forbidden: "SO-E005 禁止访问"
+err-not-found: "SO-E006 未找到"
+err-invalid-email: "SO-E007 邮箱地址无效"
+err-email-required: "SO-E008 需要有效的邮箱地址"
+err-invalid-link: "SO-E009 链接无效"
+err-confirm-link: "SO-E010 该确认链接已失效"
+err-unsubscribe-link: "SO-E011 该退订链接无效"
+err-account-unsubscribe-link: "SO-E012 退订链接无效"
+err-no-email-yet: "SO-E013 尚无可发送的邮箱地址"
+err-no-email-no-password: "SO-E014 该账户没有用于登录的邮箱地址，因此不能设置密码"
+err-mail-kind: "SO-E015 kind 必须是 welcome 或 followup"
+err-mail-days: "SO-E016 days 必须在 0 到 365 之间"
+err-template-off: "SO-E017 模板未获批准或未启用发送"
+err-unknown-provider: "SO-E018 未知的提供方"
+err-method: "SO-E019 不允许的请求方法"
+err-sso-unavailable: "SO-E020 单点登录暂不可用，请稍后再试"
+err-account-exists: "SO-E021 该地址已有账户 - 请用其他方式登录"
+err-password-short: "SO-E022 密码至少需要 %{min} 个字符"
+err-password-long: "SO-E023 密码最多 %{max} 个字符"
+err-password-email: "SO-E024 密码不能与您的邮箱地址相同"
+err-registered-here: "SO-E025 此浏览器中已创建过账户"
+err-sso-required: "SO-E026 该地址需通过其所属组织的单点登录进行登录"
+
+# === what a request that went well is told, beside its status (no code: not an error) ===
+note-check-email-account: "请查收邮件以激活您的账户"
+note-check-email-subscription: "请查收邮件以确认订阅"
+
+# === notifications (src/notify.rs): why a message did not reach a channel, and the reasons of a channel that is not set up - the tail of SO-E040, no code of their own ===
+err-notify-config: "SO-E040 未配置：%{why}"
+err-notify-refused: "SO-E041 被拒绝，状态 %{status}%{reason}"
+err-notify-rate: "SO-E042 消息过多，请在 %{secs} 秒后重试"
+err-notify-unreachable: "SO-E043 无法送达：%{why}"
+err-notify-mail: "SO-E044 邮件未发送：%{why}"
+notify-not-url: "地址不是 URL"
+notify-not-https: "地址不是 https URL"
+notify-telegram-incomplete: "Telegram 通道需要机器人令牌和聊天"
+notify-no-mailer: "邮件通道需要 mailer（Notifier::with_mailer）"
+notify-no-client: "没有 HTTP 客户端：%{why}"
+notify-not-finished: "发送未完成"
+
+# === mail: the confirmation of a new account (src/email.rs Templates::verify) ===
+mail-verify-subject: "确认您的 %{product} 账户"
+mail-verify-intro: "请确认您的邮箱地址以激活 %{product} 账户。"
+mail-verify-code: "或在确认页面输入此验证码：%{code}"
+mail-verify-ignore: "如果您没有创建此账户，请忽略此邮件。"
+
+# === mail: the code that finishes a sign-in through a provider (Templates::sign_in_code) ===
+mail-code-subject: "您的 %{product} 登录验证码"
+mail-code-intro: "有人正使用此地址通过 %{provider} 登录 %{product}。"
+mail-code-enter: "输入此验证码以完成登录：%{code}"
+mail-code-note: "验证码仅可使用一次，一小时后失效。如果不是您本人操作，请忽略此邮件 - 没有验证码不会发生任何事。"
+
+# === mail: a password reset (Templates::reset) ===
+mail-reset-subject: "重置您的 %{product} 密码"
+mail-reset-intro: "请使用此链接设置新的 %{product} 密码："
+mail-reset-expiry: "该链接仅可使用一次，%{hours} 小时后失效。"
+mail-reset-ignore: "如果您没有提出此请求，请忽略此邮件 - 您的密码未被更改。"
+
+# === mail: an address that already has an account (Templates::already_registered). %{link} and %{end} open and close the link of the HTML part ===
+mail-exists-subject: "您已拥有 %{product} 账户"
+mail-exists-intro: "刚刚有人尝试用此地址创建 %{product} 账户 - 您已经有一个账户了。"
+mail-exists-sign-in: "登录"
+mail-exists-forgot-text: "忘记密码？设置新密码（链接仅可使用一次，%{hours} 小时后失效）："
+mail-exists-forgot-html: "忘记密码？%{link}设置新密码%{end} - 该链接仅可使用一次，%{hours} 小时后失效。"
+mail-exists-ignore: "如果不是您本人操作，无需任何处理 - 您的账户未被更改。"
+
+# === mail: the updates-and-news list (Templates::subscribe_confirm, subscribe_welcome) ===
+mail-sub-confirm-subject: "确认订阅 %{product} 动态"
+mail-sub-confirm-intro: "请确认您希望通过此地址接收 %{product} 的更新和新闻："
+mail-sub-confirm-nothing: "在您确认之前，我们不会发送任何其他邮件。"
+mail-sub-confirm-ignore-text: "如果您没有提出此请求，请忽略此邮件，或在此移除该地址："
+mail-sub-confirm-ignore-html: "如果您没有提出此请求，请忽略此邮件，或%{link}移除该地址%{end}。"
+mail-sub-welcome-subject: "您已订阅 %{product} 动态"
+mail-sub-welcome-intro: "您已加入列表 - 我们会将 %{product} 的更新和新闻发送到此地址。"
+mail-sub-welcome-out-text: "您可以随时退订："
+mail-sub-welcome-out-html: "您可以随时%{link}退订%{end}。"
+
+# === mail: the footer of a mail to an account that is not about the account (Templates::welcome). %{article} is English's a/an ===
+mail-footer-why: "您收到此邮件是因为您创建了 %{product} 账户。"
+mail-footer-stop-text: "如需停止接收此类邮件：%{url}"
+mail-footer-stop-html: "%{link}停止接收此类邮件%{end}。"
+
+# === mail: the owner's alert of a list signup, in the site's language (Templates::signup_notice) ===
+mail-signup-subject: "新的 %{product} 通讯订阅：%{email}"
+mail-signup-intro: "%{email} 申请接收 %{product} 的更新。"
+mail-signup-when: "时间"
+mail-signup-source: "来源"
+mail-signup-address: "地址"
+mail-signup-referer: "引荐来源"
+mail-signup-agent: "客户端"
+mail-signup-unconfirmed: "尚未确认 - 这只是订阅申请，不是双重确认。"
+mail-signup-all: "全部订阅："
