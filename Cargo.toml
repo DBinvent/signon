@@ -1,6 +1,6 @@
 [package]
 name = "signon"
-version = "1.0.0"
+version = "1.0.1"
 edition = "2021"
 description = "Shared user management for the your backoffices: registration, email verification, login sessions, password reset and OAuth2 SSO"
 readme = "README.md"
@@ -115,7 +115,7 @@ urlencoding = { version = "2", optional = true }
 # `id_token` validation against a provider JWKS (Apple, custom OIDC) and the
 # ES256 client-secret JWT Apple requires. Its crypto backend is a feature of
 # this crate: `jwt-rust-crypto` (default) or `jwt-aws-lc`.
-jsonwebtoken = { version = "11", default-features = false, features = [
+jsonwebtoken = { version = "12", default-features = false, features = [
     "use_pem",
 ], optional = true }
 quick-xml = { version = "0.42", optional = true }

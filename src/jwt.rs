@@ -360,7 +360,7 @@ mod tests {
         let hs = jsonwebtoken::encode(
             &header,
             &claims(serde_json::json!({})),
-            &jsonwebtoken::EncodingKey::from_secret(ec_jwk_x().as_bytes()),
+            &jsonwebtoken::EncodingKey::from_secret(ec_jwk_x().as_bytes()).unwrap(),
         )
         .unwrap();
         assert!(verify(&hs, &url).await.is_err());
