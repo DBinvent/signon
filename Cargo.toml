@@ -130,7 +130,7 @@ reqwest = { version = "0.12", default-features = false, features = [
 ], optional = true }
 regex = { version = "1", optional = true }
 # [permissions] the file config that serves the mappings when the tables cannot
-toml = { version = "0.8", optional = true }
+toml = { version = "1.2", optional = true }
 urlencoding = { version = "2", optional = true }
 # `id_token` validation against a provider JWKS (Apple, custom OIDC) and the
 # ES256 client-secret JWT Apple requires. Its crypto backend is a feature of
