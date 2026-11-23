@@ -1,0 +1,58 @@
+# schema_guard schema of the `permissions` feature: what a role may do
+# on a range of keys - an etcd server first, any key space after (scope). Applied by
+# `signon::migrate()` after schema.yaml, only in a build with the feature. Keep
+# descriptions apostrophe-free (see schema.yaml).
+
+database:
+  - schema:
+    schemaName: public
+    tables:
+
+      - table:
+          tableName: role_permissions
+          description: What a role may do on a range of keys of one key space. Read per request, as user_roles is, so a change takes effect at once.
+          constraint: 'UNIQUE (role_id, scope, key, range_end)'
+          columns:
+            - column:
+                name: id
+                type: bigserial
+                constraint:
+                  primaryKey: true
+                  nullable: false
+            - column:
+                name: role_id
+                type: int
+                constraint:
+                  nullable: false
+                  foreignKey:
+                    references: roles
+                index: true
+            - column:
+                name: scope
+                type: varchar(32)
+                constraint:
+                  nullable: false
+                description: The key space, as its caller names it - etcd for an etcd server.
+            - column:
+                name: key
+                type: bytea
+                constraint:
+                  nullable: false
+            - column:
+                name: range_end
+                type: bytea
+                constraint:
+                  nullable: false
+                description: As etcd has it - empty for the key alone, a zero byte for every key from key on, else the end of the range, not included.
+            - column:
+                name: perm
+                type: smallint
+                constraint:
+                  nullable: false
+                description: 1 read, 2 write, 3 both.
+            - column:
+                name: created_at
+                type: timestamptz
+                constraint:
+                  nullable: false
+                defaultValue: now()

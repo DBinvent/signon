@@ -1,6 +1,6 @@
 [package]
 name = "signon"
-version = "1.0.1"
+version = "1.1.0"
 edition = "2021"
 description = "Shared user management for the your backoffices: registration, email verification, login sessions, password reset and OAuth2 SSO"
 readme = "README.md"
@@ -59,6 +59,23 @@ welcome-remote = ["dep:reqwest"]
 # webhook, and email through the mailer. A library, no routes; each channel is one
 # HTTP POST, so it shares the optional reqwest dep. Off by default.
 notify = ["dep:reqwest"]
+# [permissions] What a role may do on a range of keys (`permissions.rs`, the table
+# role_permissions in schema_permissions.yaml): an etcd server's key-range permissions,
+# any key space after. No dependency of its own. Off by default.
+permissions = ["dep:toml"]
+# [labac] LABAC - Leveled Attribute-Based Access Control - on top of the roles (`labac.rs`, the tables of
+# schema_labac.yaml): IdP groups and attributes mapped to a subject, resources with ACL entries,
+# the evaluator ytproxy rewrites SQL with, a JWT of the subject and its version. Needs a
+# jsonwebtoken crypto backend: `jwt-rust-crypto` (the default) or `jwt-aws-lc`. Off by default.
+labac = ["dep:regex", "dep:jsonwebtoken"]
+# [opa] labac's levels from an OPA server where one is set for a kind: one
+# POST per subject version and kind, over the optional reqwest
+opa = ["labac", "dep:reqwest"]
+# [service] Service accounts (`service.rs`, the table of schema_service.yaml): a program mapped to
+# the PostgreSQL role it uses, in by OAuth2 client credentials (`POST /token`, a short JWT), an
+# API key or a PostgreSQL password - each switched on by `Config::service`. Needs a jsonwebtoken
+# crypto backend, as `labac`. Off by default.
+service-accounts = ["dep:jsonwebtoken"]
 # More messengers for `notify`, each a template: where a request goes, its headers, its body
 # (`src/notify/template.rs`). The templates are set at build time, not at run time: build.rs
 # turns `notify-templates.toml` - or the file SIGNON_NOTIFY_TEMPLATES names when the crate is
@@ -102,7 +119,7 @@ lettre = { version = "0.11", default-features = false, features = [
     "builder",
 ] }
 time = "0.3"
-schema_guard_tokio = "2.3"
+schema_guard_tokio = "2.5"   # [labac] 2.5: the labac SQL part, labac::SQL
 # The messages in six languages (locales/*.yml, src/i18n.rs): the API's error texts and the mail
 rust-i18n = "4"
 sha2 = "0.11"
@@ -111,6 +128,9 @@ reqwest = { version = "0.12", default-features = false, features = [
     "json",
     "rustls-tls",
 ], optional = true }
+regex = { version = "1", optional = true }
+# [permissions] the file config that serves the mappings when the tables cannot
+toml = { version = "0.8", optional = true }
 urlencoding = { version = "2", optional = true }
 # `id_token` validation against a provider JWKS (Apple, custom OIDC) and the
 # ES256 client-secret JWT Apple requires. Its crypto backend is a feature of

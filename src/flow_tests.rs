@@ -1936,3 +1936,50 @@ mod languages_of_the_list {
         }
     }
 }
+
+/// [service] `POST /account/token`: client credentials in the form or as HTTP Basic, from a
+/// program (no Origin), answer a bearer token of the account; a wrong secret is 401, another
+/// grant 400; with the way switched off there is no endpoint
+#[cfg(feature = "service-accounts")]
+#[tokio::test]
+async fn service_accounts_take_a_token_with_client_credentials() {
+    let Some(pool) = pool().await else { return };
+    let service = crate::service::ServiceConfig { client_credentials: true, token_key: Some(b"svc-key".to_vec()), ..Default::default() };
+    let config = Config::new("TEST", SITE).with_service_accounts(service);
+    let state = AccountState::from_env_with_mailer(pool.clone(), config, Mailer::disabled()).await.unwrap();
+    let app = Router::new().nest("/account", crate::router(state));
+    let name = format!("svc-{}", Uuid::new_v4().simple());
+    let a = crate::service::create(&pool, &name, "app_ro", &[]).await.unwrap();
+    let secret = crate::service::rotate_client_secret(&pool, a.id).await.unwrap();
+    let post = |body: String, basic: Option<String>| {
+        let mut r = Request::post("/account/token").header(header::CONTENT_TYPE, "application/x-www-form-urlencoded");
+        if let Some(b) = basic {
+            r = r.header(header::AUTHORIZATION, b);
+        }
+        r.body(Body::from(body)).unwrap()
+    };
+    let res = app.clone().oneshot(post(format!("grant_type=client_credentials&client_id={name}&client_secret={secret}"), None)).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body: Value = serde_json::from_slice(&axum::body::to_bytes(res.into_body(), 1 << 20).await.unwrap()).unwrap();
+    let got = crate::service::verify(b"svc-key", body["access_token"].as_str().unwrap()).unwrap();
+    assert_eq!((got.id, got.pg_role.as_str(), body["token_type"].as_str()), (a.id, "app_ro", Some("Bearer")));
+    use base64::Engine;
+    let basic = format!("Basic {}", base64::engine::general_purpose::STANDARD.encode(format!("{name}:{secret}")));
+    let res = app.clone().oneshot(post("grant_type=client_credentials".into(), Some(basic))).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK, "HTTP Basic");
+    let res = app.clone().oneshot(post(format!("grant_type=client_credentials&client_id={name}&client_secret=wrong"), None)).await.unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    let res = app.clone().oneshot(post(format!("grant_type=password&client_id={name}&client_secret={secret}"), None)).await.unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    // [review 2026-11-21] a client id asking too often is turned away
+    let mut last = StatusCode::OK;
+    for _ in 0..70 {
+        last = app.clone().oneshot(post(format!("grant_type=client_credentials&client_id={name}&client_secret=wrong"), None)).await.unwrap().status();
+    }
+    assert_eq!(last, StatusCode::TOO_MANY_REQUESTS);
+    // switched off: no such endpoint
+    let off = AccountState::from_env_with_mailer(pool.clone(), Config::new("TEST", SITE), Mailer::disabled()).await.unwrap();
+    let app = Router::new().nest("/account", crate::router(off));
+    let res = app.oneshot(post(format!("grant_type=client_credentials&client_id={name}&client_secret={secret}"), None)).await.unwrap();
+    assert!(res.status() == StatusCode::NOT_FOUND || res.status() == StatusCode::METHOD_NOT_ALLOWED, "{}", res.status());
+}

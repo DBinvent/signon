@@ -105,3 +105,15 @@ mail-signup-referer: "Referer"
 mail-signup-agent: "Agent"
 mail-signup-unconfirmed: "Noch nicht bestätigt - dies ist die Anmeldung, nicht das Double-Opt-in."
 mail-signup-all: "Alle Anmeldungen:"
+
+# === [signed-in] the page the redirect after a sign-in carries (src/routes.rs signed_in_page) ===
+signed-in-title: "Bei %{product} angemeldet"
+signed-in-text: "Die Anmeldung hat geklappt. Geht diese Seite nicht von selbst weiter, folgen Sie dem Link."
+signed-in-continue: "Weiter"
+
+# === [labac] a person's database token page (src/routes.rs labac_token_answer) ===
+labac-token-title: "Ihr Datenbank-Token"
+labac-token-text: "Verwenden Sie es als Passwort einer Datenbankanmeldung über ytproxy, oder lassen Sie Ihre App es setzen. Es gilt bis %{expires}."
+labac-token-copy: "Kopieren"
+labac-token-none: "Für Sie ist noch kein Zugriff zugeordnet: Melden Sie sich zuerst über den Identitätsanbieter Ihrer Organisation an."
+labac-token-level: "Diese Stufe kann nicht angefordert werden: %{why}."

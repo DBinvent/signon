@@ -174,3 +174,13 @@ fn sp_metadata_names_entity_and_acs() {
     crate::c14n::parse(&xml).unwrap();
 }
 
+
+/// [labac] every attribute value is read, and the groups among them - none in this fixture
+#[test]
+fn every_attribute_value_is_read_for_labac() {
+    let a = verify("signed_assertion").unwrap();
+    assert!(a.attributes.contains(&("mail".to_string(), "bob@acme.com".to_string())), "{:?}", a.attributes);
+    assert!(a.attributes.contains(&("displayName".to_string(), "Bob Builder".to_string())), "{:?}", a.attributes);
+    assert!(a.groups.is_empty());
+    assert!(GROUPS_ATTRIBUTES.contains(&"memberof"));
+}

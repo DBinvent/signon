@@ -105,3 +105,15 @@ mail-signup-referer: "Référent"
 mail-signup-agent: "Agent"
 mail-signup-unconfirmed: "Pas encore confirmé - il s'agit de l'inscription, pas de la double confirmation."
 mail-signup-all: "Toutes les inscriptions :"
+
+# === [signed-in] the page the redirect after a sign-in carries (src/routes.rs signed_in_page) ===
+signed-in-title: "Connecté à %{product}"
+signed-in-text: "La connexion a réussi. Si cette page ne continue pas d'elle-même, suivez le lien."
+signed-in-continue: "Continuer"
+
+# === [labac] a person's database token page (src/routes.rs labac_token_answer) ===
+labac-token-title: "Votre jeton de base de données"
+labac-token-text: "Utilisez-le comme mot de passe d'une connexion à la base via ytproxy, ou laissez votre application le définir. Il est valable jusqu'au %{expires}."
+labac-token-copy: "Copier"
+labac-token-none: "Aucun accès ne vous est encore attribué : connectez-vous d'abord via le fournisseur d'identité de votre organisation."
+labac-token-level: "Ce niveau ne peut pas être demandé : %{why}."

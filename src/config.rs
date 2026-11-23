@@ -66,6 +66,22 @@ pub struct Config {
     /// nothing: see [`Config::with_footer_note`].
     pub footer_note: Option<FooterNote>,
 
+    /// [signed-in] The page the redirect after a sign-in carries, for a browser where the
+    /// redirect does not go through: HTML, `{url}` the address to go on
+    /// to (filled in escaped). `None`, the default: signon's own page - the sign-in worked,
+    /// the link, and a meta refresh. See [`Config::with_signed_in_page`].
+    pub signed_in_page: Option<String>,
+
+    /// [service] Which ways in the service accounts have, and the token's key - all off
+    /// unless set: see [`Config::with_service_accounts`]
+    #[cfg(feature = "service-accounts")]
+    pub service: crate::service::ServiceConfig,
+
+    /// [labac] A person's token for the database (the `/labac/token` page) and OPA's levels -
+    /// off unless set: see [`Config::with_labac`]
+    #[cfg(feature = "labac")]
+    pub labac: crate::labac::LabacConfig,
+
     /// Where the welcome's text is read when one goes out
     /// (`WELCOME_TEMPLATE_URL`; empty turns it off): `GET` answering
     /// `{subject, body, action_label, action_url}` - a template source of the
@@ -182,6 +198,11 @@ impl Config {
             account_unsubscribe_path: "/account/unsubscribe?token={token}".to_string(),
             welcome: None,
             footer_note: None,
+            signed_in_page: None,
+            #[cfg(feature = "service-accounts")]
+            service: Default::default(),
+            #[cfg(feature = "labac")]
+            labac: Default::default(),
             #[cfg(feature = "welcome-remote")]
             welcome_url: None,
             #[cfg(feature = "welcome-remote")]
@@ -366,6 +387,27 @@ impl Config {
     /// [`Config::footer_note`].
     pub fn with_footer_note(mut self, note: FooterNote) -> Self {
         self.footer_note = Some(note);
+        self
+    }
+
+    /// [signed-in] A page of the site's own for the redirect after a sign-in - see
+    /// [`Config::signed_in_page`]
+    pub fn with_signed_in_page(mut self, html: impl Into<String>) -> Self {
+        self.signed_in_page = Some(html.into());
+        self
+    }
+
+    /// [service] The service accounts' ways in: `POST /token` answers with client credentials on
+    #[cfg(feature = "service-accounts")]
+    pub fn with_service_accounts(mut self, service: crate::service::ServiceConfig) -> Self {
+        self.service = service;
+        self
+    }
+
+    /// [labac] A person's database token and OPA: `GET /labac/token` answers when it has a key
+    #[cfg(feature = "labac")]
+    pub fn with_labac(mut self, labac: crate::labac::LabacConfig) -> Self {
+        self.labac = labac;
         self
     }
 

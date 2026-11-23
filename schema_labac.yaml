@@ -1,0 +1,244 @@
+# schema_guard schema of the `labac` feature: LABAC, Leveled Attribute-Based Access Control,
+# on top of the roles - the mapping rules, the subjects they make, the resources with
+# their ACL entries, and the level each action needs. Applied by `signon::migrate()` after
+# schema.yaml, only in a build with the feature. Keep descriptions apostrophe-free (see
+# schema.yaml).
+
+database:
+  - schema:
+    schemaName: public
+    tables:
+
+      - table:
+          tableName: labac_rules
+          description: Mapping rules, applied in id order at each sign-in and SCIM change - an IdP attribute or group matched by name, prefix, regex or id gives an ABAC group, a label and a ceiling.
+          constraint: "CHECK (match_kind IN ('name', 'prefix', 'regex', 'id'))"
+          columns:
+            - column:
+                name: id
+                type: bigserial
+                constraint:
+                  primaryKey: true
+                  nullable: false
+            - column:
+                name: source
+                type: varchar(16)
+                constraint:
+                  nullable: false
+                description: saml, oidc, scim, or a star for any.
+            - column:
+                name: claim
+                type: varchar(256)
+                constraint:
+                  nullable: false
+                description: The attribute or claim name it reads, groups for the groups.
+            - column:
+                name: match_kind
+                type: varchar(16)
+                constraint:
+                  nullable: false
+                description: name, prefix, regex or id.
+            - column:
+                name: pattern
+                type: text
+                constraint:
+                  nullable: false
+            - column:
+                name: abac_group
+                type: varchar(256)
+                description: The ABAC group it gives - dollar 0 the value, dollar 1 and on its captures.
+            - column:
+                name: label_key
+                type: varchar(256)
+            - column:
+                name: label_value
+                type: varchar(256)
+            - column:
+                name: level
+                type: smallint
+                constraint:
+                  nullable: false
+                defaultValue: "0"
+                description: The label level - an entry matched through the label gives at most this; 0 no cap.
+            - column:
+                name: ceiling
+                type: smallint
+                description: No action level above it for the subject - it caps what the entries give, never a named level.
+            - column:
+                name: pg_role
+                type: varchar(63)
+                description: The PostgreSQL group role it gives - the node login ytproxy uses for the person; dollar 1 and on its captures.
+            - column:
+                name: level_name
+                type: varchar(63)
+                description: A named level it gives the person - sal, the security access level, or another name; the highest of the matched rules counts.
+            - column:
+                name: level_value
+                type: varchar(64)
+                description: That level - a number of 0 or more, or dollar 1 and on, a capture of the claim.
+
+      - table:
+          tableName: labac_levels
+          description: A level set for one person by name - sal, the security access level, or another; it stands over what the rules give. No row and no rule is level 0.
+          constraint: 'PRIMARY KEY (user_id, name)'
+          columns:
+            - column:
+                name: user_id
+                type: uuid
+                constraint:
+                  nullable: false
+                  foreignKey:
+                    references: users
+            - column:
+                name: name
+                type: varchar(63)
+                constraint:
+                  nullable: false
+            - column:
+                name: level
+                type: smallint
+                constraint:
+                  nullable: false
+
+      - table:
+          tableName: labac_subjects
+          description: What labac knows of an account - its groups, labels and ceiling as JSON - and a version any change bumps; a token of an older version is stale.
+          columns:
+            - column:
+                name: user_id
+                type: uuid
+                constraint:
+                  primaryKey: true
+                  nullable: false
+                  foreignKey:
+                    references: users
+            - column:
+                name: version
+                type: bigint
+                constraint:
+                  nullable: false
+            - column:
+                name: body
+                type: text
+                constraint:
+                  nullable: false
+            - column:
+                name: updated_at
+                type: timestamptz
+                constraint:
+                  nullable: false
+                defaultValue: now()
+
+      - table:
+          tableName: labac_resources
+          description: A resource - its kind, id, parent, labels as a JSON object and a private flag; a private resource takes only its own entries.
+          constraint: 'UNIQUE (kind, id)'
+          columns:
+            - column:
+                name: rid
+                type: bigserial
+                constraint:
+                  primaryKey: true
+                  nullable: false
+            - column:
+                name: kind
+                type: varchar(64)
+                constraint:
+                  nullable: false
+            - column:
+                name: id
+                type: varchar(256)
+                constraint:
+                  nullable: false
+            - column:
+                name: parent_kind
+                type: varchar(64)
+            - column:
+                name: parent_id
+                type: varchar(256)
+            - column:
+                name: labels
+                type: text
+                constraint:
+                  nullable: false
+                defaultValue: "'{}'"
+            - column:
+                name: private
+                type: boolean
+                constraint:
+                  nullable: false
+                defaultValue: "false"
+
+      - table:
+          tableName: labac_entries
+          description: An ACL entry - an ABAC group, a star for any subject, has a level on a resource, with a label condition; shared entries reach the resource children.
+          columns:
+            - column:
+                name: id
+                type: bigserial
+                constraint:
+                  primaryKey: true
+                  nullable: false
+            - column:
+                name: kind
+                type: varchar(64)
+                constraint:
+                  nullable: false
+            - column:
+                name: resource_id
+                type: varchar(256)
+                constraint:
+                  nullable: false
+                index: true
+            - column:
+                name: abac_group
+                type: varchar(256)
+                constraint:
+                  nullable: false
+            - column:
+                name: user_id
+                type: uuid
+                index: true
+                description: The one person the entry is for, counted only while the person is in the group; empty for the whole group.
+            - column:
+                name: label_cond
+                type: varchar(256)
+                description: key - the resource label is one the subject holds - or key=value - the subject holds that label.
+            - column:
+                name: level
+                type: smallint
+                constraint:
+                  nullable: false
+            - column:
+                name: shared
+                type: boolean
+                constraint:
+                  nullable: false
+                defaultValue: "false"
+
+      - table:
+          tableName: labac_actions
+          description: The level each action needs on a resource of a kind; else select 1, insert 2, update 3, soft_delete 4, delete 5, ddl 6 - and of an approval view 1, comment 2, recommend 3, approve 4, veto 5, override 6.
+          constraint: 'UNIQUE (kind, action)'
+          columns:
+            - column:
+                name: id
+                type: bigserial
+                constraint:
+                  primaryKey: true
+                  nullable: false
+            - column:
+                name: kind
+                type: varchar(64)
+                constraint:
+                  nullable: false
+            - column:
+                name: action
+                type: varchar(64)
+                constraint:
+                  nullable: false
+            - column:
+                name: level
+                type: smallint
+                constraint:
+                  nullable: false

@@ -105,3 +105,15 @@ mail-signup-referer: "Реферер"
 mail-signup-agent: "Агент"
 mail-signup-unconfirmed: "Ещё не подтверждено - это заявка, а не двойное подтверждение."
 mail-signup-all: "Все подписки:"
+
+# === [signed-in] the page the redirect after a sign-in carries (src/routes.rs signed_in_page) ===
+signed-in-title: "Вход в %{product} выполнен"
+signed-in-text: "Вход выполнен. Если страница не перейдет дальше сама, откройте ссылку."
+signed-in-continue: "Продолжить"
+
+# === [labac] a person's database token page (src/routes.rs labac_token_answer) ===
+labac-token-title: "Ваш токен для базы данных"
+labac-token-text: "Используйте его как пароль входа в базу данных через ytproxy или дайте приложению установить его. Он действует до %{expires}."
+labac-token-copy: "Копировать"
+labac-token-none: "Доступ для вас ещё не назначен: сначала войдите через поставщика удостоверений вашей организации."
+labac-token-level: "Этот уровень запросить нельзя: %{why}."

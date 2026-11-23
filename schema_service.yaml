@@ -1,0 +1,68 @@
+# schema_guard schema of the `service-accounts` feature: a program's account,
+# mapped to the PostgreSQL role it uses, with up to three ways in - a client secret, an API key, a
+# PostgreSQL password - each kept hashed. Applied by `signon::migrate()` after schema.yaml, only
+# in a build with the feature. Keep descriptions apostrophe-free (see schema.yaml).
+
+database:
+  - schema:
+    schemaName: public
+    tables:
+
+      - table:
+          tableName: service_accounts
+          description: A service account - its name is its OAuth2 client id - the PostgreSQL role ytproxy connects as for it, its ABAC groups, and its secrets kept hashed.
+          columns:
+            - column:
+                name: id
+                type: uuid
+                defaultValue: gen_random_uuid()
+                constraint:
+                  primaryKey: true
+                  nullable: false
+            - column:
+                name: name
+                type: varchar(128)
+                sql: 'UNIQUE'
+                constraint:
+                  nullable: false
+            - column:
+                name: pg_role
+                type: varchar(128)
+                constraint:
+                  nullable: false
+            - column:
+                name: groups
+                type: text
+                constraint:
+                  nullable: false
+                defaultValue: "'[]'"
+                description: Its ABAC groups, a JSON array, for labac.
+            - column:
+                name: secret_hash
+                type: varchar(64)
+                index: true
+                description: The OAuth2 client secret, SHA-256.
+            - column:
+                name: api_key_hash
+                type: varchar(64)
+                index: true
+                description: The API key, SHA-256.
+            - column:
+                name: pg_password_hash
+                type: text
+                description: The PostgreSQL password, argon2.
+            - column:
+                name: enabled
+                type: boolean
+                constraint:
+                  nullable: false
+                defaultValue: "true"
+            - column:
+                name: created_at
+                type: timestamptz
+                constraint:
+                  nullable: false
+                defaultValue: now()
+            - column:
+                name: rotated_at
+                type: timestamptz

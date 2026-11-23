@@ -54,6 +54,19 @@ pub struct IdClaims {
     pub name: Option<String>,
     pub nonce: Option<String>,
     pub azp: Option<String>,
+    /// [labac] the OIDC `groups` claim, an array or one string: what labac's rules map
+    #[serde(default, deserialize_with = "groups_claim")]
+    pub groups: Vec<String>,
+}
+
+/// [labac] `groups` as an IdP sends it: an array of strings, one string, or nothing
+fn groups_claim<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<String>, D::Error> {
+    let v = <Option<serde_json::Value> as serde::Deserialize>::deserialize(d)?;
+    Ok(match v {
+        Some(serde_json::Value::String(s)) => vec![s],
+        Some(serde_json::Value::Array(a)) => a.into_iter().filter_map(|x| x.as_str().map(String::from)).collect(),
+        _ => Vec::new(),
+    })
 }
 
 struct CachedJwks {

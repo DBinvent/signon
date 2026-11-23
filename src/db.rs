@@ -579,6 +579,38 @@ pub async fn touch_session(
     .await?)
 }
 
+/// [api] A session's account, `last_seen_at` written only when it is older than
+/// `every` - one statement: a caller that checks a token per request writes once a
+/// minute, not once a request. Expired rows do not match.
+pub async fn session_user_throttled(
+    pool: &PgPool,
+    token_hash: &str,
+    every: std::time::Duration,
+) -> anyhow::Result<Option<Uuid>> {
+    let secs = every.as_secs_f64();
+    Ok(sqlx::query_scalar::<_, Uuid>(
+        "WITH s AS (SELECT id, user_id, last_seen_at FROM sessions \
+                    WHERE token_hash = $1 AND expires_at > now()), \
+              t AS (UPDATE sessions SET last_seen_at = now() \
+                    WHERE id IN (SELECT id FROM s WHERE last_seen_at < now() - make_interval(secs => $2))) \
+         SELECT user_id FROM s",
+    )
+    .bind(token_hash)
+    .bind(secs)
+    .fetch_optional(pool)
+    .await?)
+}
+
+/// [api] `delete_session_by_token`, saying whether there was one
+pub async fn delete_session_by_token_counted(pool: &PgPool, token_hash: &str) -> anyhow::Result<bool> {
+    Ok(sqlx::query("DELETE FROM sessions WHERE token_hash = $1")
+        .bind(token_hash)
+        .execute(pool)
+        .await?
+        .rows_affected()
+        > 0)
+}
+
 pub async fn delete_session_by_token(pool: &PgPool, token_hash: &str) -> anyhow::Result<()> {
     sqlx::query("DELETE FROM sessions WHERE token_hash = $1")
         .bind(token_hash)
@@ -688,6 +720,74 @@ pub async fn roles_for_user(pool: &PgPool, user_id: Uuid) -> anyhow::Result<Vec<
     .bind(user_id)
     .fetch_all(pool)
     .await?)
+}
+
+// [api] what crate::api's callers manage roles with (an etcd server's user and role calls)
+
+pub async fn role_names(pool: &PgPool) -> anyhow::Result<Vec<String>> {
+    Ok(sqlx::query_scalar::<_, String>("SELECT name FROM roles ORDER BY name").fetch_all(pool).await?)
+}
+
+pub async fn add_role(pool: &PgPool, role: &str) -> anyhow::Result<bool> {
+    Ok(sqlx::query("INSERT INTO roles (name) VALUES ($1) ON CONFLICT (name) DO NOTHING")
+        .bind(role)
+        .execute(pool)
+        .await?
+        .rows_affected()
+        == 1)
+}
+
+/// The role, its grants and - where the `permissions` feature made the table, whether
+/// or not this build has it - its permissions, in one transaction
+pub async fn delete_role(pool: &PgPool, role: &str) -> anyhow::Result<bool> {
+    let mut tx = pool.begin().await?;
+    let Some(id) = sqlx::query_scalar::<_, i32>("SELECT id FROM roles WHERE name = $1")
+        .bind(role)
+        .fetch_optional(&mut *tx)
+        .await?
+    else {
+        return Ok(false);
+    };
+    sqlx::query("DELETE FROM user_roles WHERE role_id = $1").bind(id).execute(&mut *tx).await?;
+    let perms: bool = sqlx::query_scalar("SELECT to_regclass('role_permissions') IS NOT NULL")
+        .fetch_one(&mut *tx)
+        .await?;
+    if perms {
+        sqlx::query("DELETE FROM role_permissions WHERE role_id = $1").bind(id).execute(&mut *tx).await?;
+    }
+    sqlx::query("DELETE FROM roles WHERE id = $1").bind(id).execute(&mut *tx).await?;
+    tx.commit().await?;
+    Ok(true)
+}
+
+pub async fn revoke_role(pool: &PgPool, user_id: Uuid, role: &str) -> anyhow::Result<bool> {
+    Ok(sqlx::query(
+        "DELETE FROM user_roles WHERE user_id = $1 AND role_id = (SELECT id FROM roles WHERE name = $2)",
+    )
+    .bind(user_id)
+    .bind(role)
+    .execute(pool)
+    .await?
+    .rows_affected()
+        > 0)
+}
+
+/// [api] a verified account with a password; `None` when the address is taken
+pub async fn add_verified_account(pool: &PgPool, email: &str, password_hash: &str) -> anyhow::Result<Option<Uuid>> {
+    Ok(sqlx::query_scalar::<_, Uuid>(
+        "INSERT INTO users (email, email_verified, password_hash) VALUES ($1, true, $2) \
+         ON CONFLICT DO NOTHING RETURNING id",
+    )
+    .bind(email)
+    .bind(password_hash)
+    .fetch_optional(pool)
+    .await?)
+}
+
+pub async fn user_emails(pool: &PgPool) -> anyhow::Result<Vec<String>> {
+    Ok(sqlx::query_scalar::<_, String>("SELECT email FROM users WHERE email IS NOT NULL ORDER BY email")
+        .fetch_all(pool)
+        .await?)
 }
 
 // ---- federated identities --------------------------------------------------

@@ -12,6 +12,28 @@ came before, what was fixed, and what was deliberately left out.
 `web/` holds the frontend half — an API client and the React screens the four
 Next.js apps mount.
 
+## Architecture
+
+Where signon stands among the services that use it (YT Cluster's first):
+
+1. **Authentication, in signon:** email and password, OAuth2 and OIDC sign-in, SAML 2.0
+   (features `oauth`, `sso`, `saml`), sessions; for a program, a service account
+   (feature `service-accounts`).
+2. **Authorization, in the services:** signon decides the levels - roles, key-range
+   permissions (feature `permissions`), leveled attributes (LABAC, feature `labac`) - and a
+   service enforces them. ytproxy rewrites each SQL statement with labac's predicate, or a
+   database's RLS policies compare with `labac.ids()`; an etcd server checks key ranges.
+3. **Service accounts to PostgreSQL roles:** each service account names the PostgreSQL role
+   it uses; ytproxy connects as that role, and labac applies to the account as to a person.
+4. **A guardrail for the LLM paths** (ClickHouse and DataFusion over the cluster's tables):
+   the model's statement runs as the asking subject - the same labac predicate added to what
+   it reads, its tables limited to the ones the subject reaches. Described here, built later.
+
+signon depends on no other service: an etcd server depends on signon, never the reverse. Its
+tables stay in the site's database; with PostgreSQL not answering, or a feature's tables not
+there, a basic file config serves the role mappings (see `permissions`), and the other table
+operations are skipped.
+
 ## Using it
 
 ```rust
@@ -143,6 +165,143 @@ cookie, set on every sign-in and every `/register` answer; its hash and the
 accounts it created or signed in to are in `user_browsers`. Only used to ask
 before a second account is registered from one browser — a nudge, not a
 security boundary.
+
+## Without a browser (`signon::api`), and key-range permissions (feature `permissions`)
+
+For a service that is not a web page - an etcd server's Auth API first - over the same
+accounts and sessions:
+
+| call | what |
+|---|---|
+| `api::sign_in(&state, email, password, client, via)` | `client` is each caller's own address (one value for all puts every caller in one limit). `/login`'s checks - its limits (shared: one count per address), SSO enforcement, one answer for a wrong password and an unverified or suspended account - then a session with no cookie: `SignedIn { token, user_id, expires_in }`. `via` is stored on the session (`etcd`), so `revoke_sessions_via` ends them all |
+| `api::identity(&pool, token)` | the account and its roles now, `None` for an unknown, expired, unverified or suspended one. Its `last_seen_at` is written at most once a minute (`TOUCH_EVERY`): a caller checks per request, and a replicated database would carry a write per request |
+| `api::sign_out(&pool, token)` | ends that session |
+| `api::account`, `accounts`, `roles`, `add_role`, `delete_role`, `revoke_role` | accounts by address and role management, for a caller's user and role calls |
+| `api::add_account(&pool, email, password)` | a verified account with a password, from a tool rather than the sign-up page - the first `root` of an etcd server. The password policy holds; `None` for a taken address |
+
+With the `permissions` feature, `signon::migrate` also applies
+`schema_permissions.yaml`: the table `role_permissions` - what a role may do (`READ` 1,
+`WRITE` 2, `READWRITE` 3) on a range of keys of one key space (`scope`, `etcd` for an etcd
+server). A range is etcd's: an empty end is the key alone, a zero byte every key from
+the key on. `permissions::grant` (the same range again replaces), `revoke`, `of_role`,
+`of_user`, and `permits(&perms, key, range_end, want)`: the range must lie inside what
+the grants giving `want` cover together. `delete_role` takes a role's permissions with
+it, also from a build without the feature.
+
+**The file config, a functional backup.** With PostgreSQL not answering, or the table not
+there, `of_user` and `of_role` answer from a file - `permissions::set_file(path)`, or
+`SIGNON_PERMISSIONS_FILE`, TOML - and `grant` and `revoke` are skipped (`false`, said in the
+log, as for no such role). The file answers as it is written: a permission revoked in the
+table stands in the file until the table answers again - keep the two in step.
+
+```toml
+[roles.reader]
+permissions = [{ scope = "etcd", key = "/app/", range_end = "/app0", perm = 1 }]
+[roles.all]
+permissions = [{ scope = "etcd", key = "", range_end = "\u0000", perm = 3 }]
+[users]
+"4f0c7f8e-0000-4000-8000-000000000001" = ["reader"]
+```
+
+## LABAC: Leveled Attribute-Based Access Control (feature `labac`)
+
+`signon::migrate` also applies `schema_labac.yaml`, and `signon::labac` decides on it:
+
+- **Named levels** (the security access level `sal`, or any other name): a person's own level,
+  compared with a row's - the person reaches a row whose level of that name is the same or lower,
+  whatever its department. A mapping rule gives one (`level_name`, `level_value`: a number, or
+  `$1` a capture of the claim - `clearance = L5` gives `sal = 5`; the highest matched rule
+  counts); a row for one person stands over the rules (`set_level(&pool, user, "sal", Some(3))`,
+  table `labac_levels`; `None` takes it away) and takes effect at once - the subject's version
+  moves. No rule and no row is level 0: no row of a table that declares the level. The ceiling is
+  the action scale's and caps no named level. With `Opa::with_named_levels(url, names)` an OPA
+  server's answer is the person's level of those names instead (`own_levels`).
+- **A level asked** is never above the person's own: the token page mints a token for a level
+  (`GET /labac/token?level=2` - `sal` - or `?level.review=1`; above its own: 403), which is that
+  token's top, and a session through ytproxy may lower it further (`SET labac.level = 2`).
+- **Every resource of a kind**: an ACL entry on resource `*` gives its group, or its one person,
+  the entry's level on every resource of the kind - also on ids `labac_resources` does not list,
+  and on private ones (`Acl::any`). No resource may have the id `*`. ytproxy and the rls policies
+  then leave the kind's condition out for that action and compare the levels only: a reviewer of
+  every department, below the top secret rows.
+
+- **Mapping rules** (`labac_rules`, `add_rule`): an IdP attribute or group - a SAML attribute,
+  an OIDC `groups` claim, a SCIM group - matched by name, prefix, regex (with captures) or id,
+  gives an ABAC group, a label (`department = $1`) with a level, optionally a ceiling, and
+  optionally a `pg_role`: the PostgreSQL group role ytproxy logs in to a node as for the person.
+  `remap(&pool, user_id, &claims)` runs them at each sign-in and SCIM change
+  (`claims_of_oidc`, `claims_of_saml` read the claims); the result is the account's
+  **subject** - groups, labels, ceiling, PostgreSQL roles in rule order - with a version every change bumps, told to the
+  embedder's `SubjectHook` (YT Cluster writes an etcd key ytproxy and yui watch).
+- **Resources and entries** (`labac_resources`, `labac_entries`, `labac_actions`): a resource
+  has a kind, an id, a parent, labels and a private flag; an entry gives an ABAC group (`*`
+  any) a level on a resource, with a label condition (`key` relative, `key=value` literal) and
+  a shared flag - with a `user_id`, to that one person, counted only while the person is in
+  the entry's group; an action is a level per kind, else select 1, insert 2, update 3,
+  soft_delete 4 (an UPDATE that sets the table's soft-delete column), delete 5, ddl 6
+  (`labac::ACTIONS`).
+- **The approval scale** (`labac::APPROVAL_ACTIONS`): the same levels read as what people decide -
+  view 1, comment 2, recommend 3, approve 4, veto 5, override 6 - unless a kind sets its own
+  (`set_action`). A level gives its action and every one below: to approve is not yet to veto.
+  `acl.allowed(&subject, kind, id, "approve")` answers it; what an approval is of, and what a veto
+  does, is the caller's - an etcd server counts the approvals of a queue's messages by it.
+- **OPA** (feature `opa`): `Opa::new(url, kinds, cache_for)` - for its kinds (all, when none are
+  named) an OPA server is asked once per subject version and kind, `POST url` with
+  `{"input": {"subject", "kind", "resources"}}`, and answers `{"result": {"<id>": level}}`; a level
+  it gives is the resource's (raising or lowering signon's own), the ceiling still caps it, a
+  resource it does not name keeps signon's level, and no answer grants nothing of that kind.
+  `opa.reach(&acl, &subject, kind, action)` is `reach` with it.
+- **The evaluator** (`load_acl`, `Acl`): `level(subject, kind, id)` - the highest matching
+  entry, on the resource or shared down from a parent (a private resource takes only its own);
+  0 denies, the ceiling caps, and `Why` names the entry; `allowed`, `reach` (the ids allowed an
+  action), `predicate` (`{column} = ANY($n)` with the ids, for ytproxy).
+- **The token:** `issue(key, &subject, ttl)` - a JWT of the account and its version, HS256;
+  `current(&pool, key, token)` answers the subject only while the version is the current one.
+  `Config::with_labac(LabacConfig { token_key, token_ttl, .. })` opens `GET /labac/token`
+  to a signed-in person: a page with the token and a copy button (the password of a database
+  login through ytproxy, for psql and the like), or with `Accept: application/json`
+  `{token, expires_at, version}` (an app's `SET labac.token`); 8 hours unless set; 403 for an
+  account no rule has mapped yet.
+- **The SQL half, optional:** `apply_sql(&pool, key)` - only where the configuration asks for
+  it - makes `labac.enter(token)` (SECURITY DEFINER: checks the HMAC ytproxy signed with,
+  through pgcrypto, and an expiry, and holds the signed token for the transaction;
+  `enter_token` makes one) and `labac.ids(kind, action)`, what an RLS policy compares a column
+  with - SECURITY DEFINER too, checking the held token again, so a value a session sets with
+  `set_config` itself is no subject. Held for the transaction: ytproxy calls `labac.enter`
+  inside it (in autocommit it is gone with the statement, and every policy denies). The SQL
+  is schema_guard's since its 2.5.0 (`schema_guard_tokio::labac::SQL`), and so are the policies:
+  a table's `security: {schemaPath, alias, softDelete}` in its schema_guard YAML, deployed under
+  schema_guard's `Rls` mode - the `alias` is the resource kind here, the `schemaPath` where a
+  row's value of it is.
+- **One remap of an account at a time:** a sign-in and a SCIM change at once each go on from
+  the version the other wrote.
+
+## Service accounts (feature `service-accounts`)
+
+`schema_service.yaml`'s `service_accounts`: a program's account, its name the OAuth2 client id,
+mapped to the PostgreSQL role it uses (`service::create`). Three ways in, each switched on by
+`Config::with_service_accounts(ServiceConfig { .. })` and each secret kept hashed:
+
+| way | made by | checked by |
+|---|---|---|
+| OAuth2 client credentials | `rotate_client_secret` (shown once) | `POST /token` (`grant_type=client_credentials`, form or HTTP Basic): a short JWT of the account, its role and groups (`service::verify`) |
+| an API key | `rotate_api_key` (`sk_...`, shown once) | `by_api_key` |
+| a PostgreSQL password | `set_pg_password` (argon2) | `by_pg_password` - ytproxy, when the program signs in through it |
+
+`set_enabled(.., false)` closes every way at once; `ServiceAccount::subject()` is labac's view.
+`service::current(&pool, key, token)` is how a token is taken: signed, not expired, its account
+enabled and not rotated or switched since the token was issued, with the role and groups as they
+are now (`verify` checks the signature alone). `/token` is rate limited per client id.
+
+**1.1 and struct literals:** 1.1 adds fields to `saml::Assertion` (`groups`, `attributes`),
+`jwt::IdClaims` (`groups`) and `Config` (`signed_in_page`, `service`). A caller that builds one
+of them by a struct literal, rather than receiving it or with `Config::new`, adds them.
+
+## After a sign-in: a page for a broken redirect
+
+The redirect after an SSO sign-in (`303`) carries a page of its own: the sign-in worked, the link
+to go on, a meta refresh - for a browser, or a proxy, that does not follow it. A site replaces
+it with `Config::with_signed_in_page(html)`, `{url}` filled in escaped.
 
 ## Environment
 

@@ -1,4 +1,4 @@
-//! The SAML test documents, made where they are not on the machine (owner, 2026-11-15: nothing
+//! The SAML test documents, made where they are not on the machine (nothing
 //! with a name or a key in it has to be pushed). `tests/fixtures/saml/` as it was first made holds
 //! documents signed by `signxml`, an independent XML-DSig implementation: where that set is
 //! there, the tests read it, and it is the one that checks this crate's verifier against another

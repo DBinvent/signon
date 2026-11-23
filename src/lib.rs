@@ -33,6 +33,8 @@ compile_error!("signon: feature `oauth` needs a jsonwebtoken backend: `jwt-rust-
 rust_i18n::i18n!("locales", fallback = "en");
 
 mod account_mail;
+// [api] sign-in and the session check for a caller that is not a browser
+pub mod api;
 mod config;
 mod current_user;
 mod db;
@@ -60,6 +62,51 @@ pub mod saml;
 pub mod broker;
 #[cfg(feature = "notify")]
 pub mod notify;
+#[cfg(feature = "permissions")]
+pub mod permissions;
+#[cfg(feature = "labac")]
+pub mod labac;
+#[cfg(feature = "service-accounts")]
+pub mod service;
+
+/// [labac] [service] jsonwebtoken's crypto backend where a build has both (`--all-features`):
+/// the pure-Rust one named, once - as `jwt::backend` does for the `oauth` feature, which these
+/// two do not need
+#[cfg(any(feature = "labac", feature = "service-accounts"))]
+pub(crate) fn jwt_backend() {
+    #[cfg(all(feature = "jwt-rust-crypto", feature = "jwt-aws-lc"))]
+    {
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        ONCE.call_once(|| {
+            let _ = jsonwebtoken::crypto::rust_crypto::DEFAULT_PROVIDER.install_default();
+        });
+    }
+}
+
+/// [api] The scratch database of the api and permissions tests (`SIGNON_TEST_DB`, or
+/// `postgres:///signon_test` over the local socket), migrated once for every test of
+/// the run - tests running at once would race each other's migration. `None`, said,
+/// without one.
+#[cfg(test)]
+pub(crate) async fn test_pool(who: &str) -> Option<PgPool> {
+    static MIGRATED: tokio::sync::OnceCell<bool> = tokio::sync::OnceCell::const_new();
+    let url = std::env::var("SIGNON_TEST_DB")
+        .unwrap_or_else(|_| "postgres:///signon_test?host=/var/run/postgresql".to_string());
+    let ok = *MIGRATED
+        .get_or_init(|| async {
+            if sqlx::postgres::PgPoolOptions::new().max_connections(1).connect(&url).await.is_err() {
+                return false;
+            }
+            migrate(&url).await.expect("apply the schemas to the test database");
+            true
+        })
+        .await;
+    if !ok {
+        eprintln!("{who} tests skipped: no test database");
+        return None;
+    }
+    sqlx::postgres::PgPoolOptions::new().max_connections(4).connect(&url).await.ok()
+}
 #[cfg(all(test, feature = "oauth"))]
 mod flow_tests;
 #[cfg(feature = "test-support")]
@@ -245,6 +292,12 @@ pub fn router(state: AccountState) -> Router {
 }
 
 const SCHEMA: &str = include_str!("../schema.yaml");
+#[cfg(feature = "permissions")]
+const SCHEMA_PERMISSIONS: &str = include_str!("../schema_permissions.yaml");
+#[cfg(feature = "labac")]
+const SCHEMA_LABAC: &str = include_str!("../schema_labac.yaml");
+#[cfg(feature = "service-accounts")]
+const SCHEMA_SERVICE: &str = include_str!("../schema_service.yaml");
 
 /// Applies `schema.yaml` to `db_url`. Call once at startup, before building
 /// the pool.
@@ -262,6 +315,33 @@ pub async fn migrate(db_url: &str) -> anyhow::Result<()> {
     )
     .await
     .map_err(|e| anyhow::anyhow!("apply signon schema.yaml: {e}"))?;
+    // [permissions] the feature's table, after the roles it refers to
+    #[cfg(feature = "permissions")]
+    {
+        let schema = schema_guard_tokio::load_schema_from_src(SCHEMA_PERMISSIONS.to_string())
+            .map_err(|e| anyhow::anyhow!("parse signon schema_permissions.yaml: {e}"))?;
+        schema_guard_tokio::migrate_opt(schema, db_url, &schema_guard_tokio::MigrationOptions::default())
+            .await
+            .map_err(|e| anyhow::anyhow!("apply signon schema_permissions.yaml: {e}"))?;
+    }
+    // [labac] the feature's tables, after the users its subjects refer to
+    #[cfg(feature = "labac")]
+    {
+        let schema = schema_guard_tokio::load_schema_from_src(SCHEMA_LABAC.to_string())
+            .map_err(|e| anyhow::anyhow!("parse signon schema_labac.yaml: {e}"))?;
+        schema_guard_tokio::migrate_opt(schema, db_url, &schema_guard_tokio::MigrationOptions::default())
+            .await
+            .map_err(|e| anyhow::anyhow!("apply signon schema_labac.yaml: {e}"))?;
+    }
+    // [service] the feature's table
+    #[cfg(feature = "service-accounts")]
+    {
+        let schema = schema_guard_tokio::load_schema_from_src(SCHEMA_SERVICE.to_string())
+            .map_err(|e| anyhow::anyhow!("parse signon schema_service.yaml: {e}"))?;
+        schema_guard_tokio::migrate_opt(schema, db_url, &schema_guard_tokio::MigrationOptions::default())
+            .await
+            .map_err(|e| anyhow::anyhow!("apply signon schema_service.yaml: {e}"))?;
+    }
     Ok(())
 }
 

@@ -1,4 +1,4 @@
-//! The private keys the tests sign with. None is in the repository (owner, 2026-11-15: no file
+//! The private keys the tests sign with. None is in the repository (no file
 //! that is named private or holds a private key is pushed): the first test that needs one makes
 //! it with `openssl`, under `tests/fixtures/` of this checkout - `.gitignore` keeps it out - or
 //! in a directory of the user's own under the temp directory when the crate's own directory

@@ -84,7 +84,15 @@ pub struct Assertion {
     pub subject: String,
     pub email: Option<String>,
     pub name: Option<String>,
+    /// [labac] the groups attribute's values (`groups`, `memberOf`, the Microsoft groups claim)
+    pub groups: Vec<String>,
+    /// [labac] every attribute value, as (name, value): what labac's rules map
+    pub attributes: Vec<(String, String)>,
 }
+
+/// [labac] the attribute names a groups list comes under
+pub const GROUPS_ATTRIBUTES: &[&str] = &["groups", "memberof", "group",
+    "http://schemas.microsoft.com/ws/2008/06/identity/claims/groups", "http://schemas.xmlsoap.org/claims/group"];
 
 /// `_` plus 40 hex characters. An xs:ID must not start with a digit.
 pub fn new_request_id() -> String {
@@ -355,10 +363,29 @@ pub fn verify_response(
         (!full.is_empty()).then_some(full)
     });
 
+    // [labac] every value of every attribute, and the groups among them
+    let mut attributes = Vec::new();
+    if let Some(statement) = doc.child_named(assertion, ASSERTION_NS, "AttributeStatement") {
+        for a in doc.children_named(statement, ASSERTION_NS, "Attribute") {
+            let Some(n) = doc.attr(a, "Name") else { continue };
+            for v in doc.children_named(a, ASSERTION_NS, "AttributeValue") {
+                let v = doc.text(v).trim().to_string();
+                if !v.is_empty() {
+                    attributes.push((n.to_string(), v));
+                }
+            }
+        }
+    }
+    let groups = attributes.iter()
+        .filter(|(n, _)| GROUPS_ATTRIBUTES.iter().any(|g| n.eq_ignore_ascii_case(g)))
+        .map(|(_, v)| v.clone()).collect();
+
     Ok(Assertion {
         subject: subject_value,
         email,
         name,
+        groups,
+        attributes,
     })
 }
 

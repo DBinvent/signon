@@ -30,11 +30,12 @@ use crate::{db, email::Templates, password, token, AccountState};
 // per-email catches many sources hammering one. The DB-side resend cooldown
 // in `resend_verify` is a third, narrower guard and not a replacement.
 const HOUR: Duration = Duration::from_secs(3600);
-const FIVE_MIN: Duration = Duration::from_secs(300);
+pub(crate) const FIVE_MIN: Duration = Duration::from_secs(300);
 const REGISTER_PER_IP: usize = 10;
 const REGISTER_PER_EMAIL: usize = 3;
-const LOGIN_PER_IP: usize = 30;
-const LOGIN_PER_EMAIL: usize = 10;
+// [api] shared with crate::api's sign-in: one count per address and per client
+pub(crate) const LOGIN_PER_IP: usize = 30;
+pub(crate) const LOGIN_PER_EMAIL: usize = 10;
 const MAIL_PER_IP: usize = 10;
 const MAIL_PER_EMAIL: usize = 3;
 const CODE_PER_IP: usize = 20;
@@ -60,6 +61,10 @@ pub fn router(state: AccountState) -> Router {
         )
         .route("/sessions/{id}", delete(revoke_session));
 
+    // [labac] a person's database token, when the configuration has a key for it
+    #[cfg(feature = "labac")]
+    let authed = if state.config.labac.token_key.is_some() { authed.route("/labac/token", get(labac_token)) } else { authed };
+
     let router = public.merge(authed).merge(crate::account_mail::routes());
 
     #[cfg(feature = "oauth")]
@@ -79,6 +84,9 @@ pub fn router(state: AccountState) -> Router {
 
     #[cfg(feature = "sso-broker")]
     let router = router.merge(crate::broker::routes());
+    // [service] the client-credentials token endpoint, when the configuration has it on
+    #[cfg(feature = "service-accounts")]
+    let router = if state.config.service.client_credentials { router.merge(crate::service::routes()) } else { router };
 
     router
         .layer(axum::middleware::from_fn_with_state(
@@ -464,12 +472,12 @@ pub(crate) fn mask_email(email: &str) -> String {
 /// or without an account. A stub without `sso-broker` so `login` and
 /// `register` need no `#[cfg]` of their own.
 #[cfg(feature = "sso-broker")]
-async fn enforcement_refusal(state: &AccountState, email: &str) -> Option<Response> {
+pub(crate) async fn enforcement_refusal(state: &AccountState, email: &str) -> Option<Response> {
     crate::broker::enforcement_refusal(state, email).await
 }
 
 #[cfg(not(feature = "sso-broker"))]
-async fn enforcement_refusal(_state: &AccountState, _email: &str) -> Option<Response> {
+pub(crate) async fn enforcement_refusal(_state: &AccountState, _email: &str) -> Option<Response> {
     None
 }
 
@@ -897,60 +905,26 @@ async fn login(
     // password.
     let email = req.email.trim().to_lowercase();
 
-    if !state.limiter.check(
-        &format!("login:ip:{}", meta.ip_key()),
-        LOGIN_PER_IP,
-        FIVE_MIN,
-    ) || !state
-        .limiter
-        .check(&format!("login:em:{email}"), LOGIN_PER_EMAIL, FIVE_MIN)
+    // [api] the checks are crate::api's, shared with a sign-in that is not a browser's
+    let user = match crate::api::check_password(
+        &state,
+        &email,
+        &req.password,
+        &meta.ip_key(),
+        meta.ip.as_deref(),
+        meta.user_agent.as_deref(),
+    )
+    .await
     {
-        return too_many().into_response();
-    }
-
-    // Before the account lookup: the answer depends on the domain only.
-    if let Some(refusal) = enforcement_refusal(&state, &email).await {
-        return refusal;
-    }
-
-    let user = match db::find_user_by_email(&state.pool, &email).await {
-        Ok(u) => u,
-        Err(e) => {
+        crate::api::Checked::Ok(u) => u,
+        crate::api::Checked::TooMany => return too_many().into_response(),
+        crate::api::Checked::Sso(refusal) => return refusal,
+        crate::api::Checked::Wrong => return credential_error().into_response(),
+        crate::api::Checked::Internal(e) => {
             tracing::error!(%e, "find_user_by_email");
             return internal_error().into_response();
         }
     };
-
-    let authenticated = match &user {
-        Some(u) => match &u.password_hash {
-            Some(hash) => password::verify(&req.password, hash) && u.email_verified && !u.suspended,
-            // An SSO-only account has no local password to be wrong. Still do
-            // the argon2 work below so it is not distinguishable by timing.
-            None => {
-                password::verify(&req.password, password::dummy_hash());
-                false
-            }
-        },
-        None => {
-            password::verify(&req.password, password::dummy_hash());
-            false
-        }
-    };
-
-    if !authenticated {
-        db::log_event(
-            &state.pool,
-            "login_fail",
-            user.as_ref().map(|u| u.id),
-            Some(&email),
-            meta.ip.as_deref(),
-            meta.user_agent.as_deref(),
-        )
-        .await;
-        return credential_error().into_response();
-    }
-
-    let user = user.expect("authenticated implies a user row");
     let jar = match start_session(&state, jar, user.id, &meta, "password", None).await {
         Ok(j) => j,
         Err(e) => {
@@ -1602,11 +1576,141 @@ async fn finish_oauth(
     .await;
 
     let target = flow.redirect_to.unwrap_or_else(|| "/".to_string());
+    (jar, signed_in_redirect(state, &format!("{}{}", state.config.app_base_url, target))).into_response()
+}
+
+/// [labac] A person's database token: for ytproxy - the password of a
+/// login through it, or `SET labac.token` in an app's session, which ytproxy takes itself (the
+/// database never sees this token: ytproxy enters a token of its own there) - signed with the labac key, for
+/// the subject's version of now; `Accept: application/json` gets `{token, expires_at, version}`,
+/// else a page with the token and a copy button. No subject yet (no sign-in through an IdP
+/// mapped it): 403.
+#[cfg(feature = "labac")]
+async fn labac_token(State(state): State<AccountState>, user: CurrentUser, headers: axum::http::HeaderMap,
+    axum::extract::RawQuery(query): axum::extract::RawQuery) -> Response {
+    let json = headers.get(header::ACCEPT).and_then(|v| v.to_str().ok()).is_some_and(|v| v.contains("application/json"));
+    let subject = match crate::labac::subject(&state.pool, user.id).await {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::error!(%e, "labac subject");
+            return internal_error().into_response();
+        }
+    };
+    // [levels] the levels the call asks the token for (`?level=2`, `?level.sal=3`), against the
+    // person's own - an OPA's where one gives them
+    let asked = crate::labac::asked_from_query(query.as_deref().unwrap_or(""));
+    let own = match subject.as_ref() {
+        Some(s) => match crate::labac::own_levels(&state.config.labac, s).await {
+            Ok(o) => o,
+            Err(e) => {
+                tracing::error!(%e, "labac levels");
+                return internal_error().into_response();
+            }
+        },
+        None => Default::default(),
+    };
+    labac_token_answer_at(&state.config, subject.as_ref(), &own, asked, json, chrono::Utc::now())
+}
+
+/// [labac] The token page's answer for `subject`, at `now`
+#[cfg(all(test, feature = "labac"))]
+pub(crate) fn labac_token_answer(config: &crate::config::Config, subject: Option<&crate::labac::Subject>, json: bool,
+    now: chrono::DateTime<chrono::Utc>) -> Response {
+    let own = subject.map(|s| s.levels.clone()).unwrap_or_default();
+    labac_token_answer_at(config, subject, &own, Ok(Vec::new()), json, now)
+}
+
+/// [levels] [`labac_token_answer`] for the levels a call asks (`asked`), against the person's `own`:
+/// the token is minted for them - its tops - and a level above the person's own is refused (403)
+#[cfg(feature = "labac")]
+pub(crate) fn labac_token_answer_at(config: &crate::config::Config, subject: Option<&crate::labac::Subject>,
+    own: &std::collections::BTreeMap<String, i16>, asked: Result<Vec<(String, i16)>, String>, json: bool,
+    now: chrono::DateTime<chrono::Utc>) -> Response {
+    // [review 2026-11-21] an empty key is no key: what it signs anyone could sign
+    let Some(key) = config.labac.token_key.as_ref().filter(|k| !k.is_empty()) else { return StatusCode::NOT_FOUND.into_response() };
+    let lang = config.site_lang();
+    let no_store = [(header::CACHE_CONTROL, "no-store")];
+    let page = |title: String, body: String| format!("<!doctype html><html lang=\"{lang}\"><head><meta charset=\"utf-8\">\
+        <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>{title}</title>\
+        <style>body{{font-family:system-ui,sans-serif;max-width:40rem;margin:4rem auto;padding:0 1rem;line-height:1.5}}\
+        textarea{{width:100%;height:8rem;font-family:monospace;word-break:break-all}}button{{margin-top:.5rem}}</style>\
+        </head><body><h1>{title}</h1>{body}</body></html>");
+    let Some(s) = subject else {
+        if json {
+            return (StatusCode::FORBIDDEN, no_store, Json(json!({ "error": "no_subject" }))).into_response();
+        }
+        let title = crate::i18n::text_in(lang, "labac-token-title", &[]);
+        let body = format!("<p>{}</p>", crate::i18n::text_in(lang, "labac-token-none", &[]));
+        return (StatusCode::FORBIDDEN, no_store, [(header::CONTENT_TYPE, "text/html; charset=utf-8")], page(title, body)).into_response();
+    };
+    let levels = match asked.and_then(|a| crate::labac::asked_levels(own, &a)) {
+        Ok(l) => l,
+        Err(why) => {
+            if json {
+                return (StatusCode::FORBIDDEN, no_store, Json(json!({ "error": "level", "detail": why }))).into_response();
+            }
+            let title = crate::i18n::text_in(lang, "labac-token-title", &[]);
+            // what was asked is the caller's text: escaped before it is shown
+            let why = why.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;");
+            let body = format!("<p>{}</p>", crate::i18n::text_in(lang, "labac-token-level", &[("why", &why)]));
+            return (StatusCode::FORBIDDEN, no_store, [(header::CONTENT_TYPE, "text/html; charset=utf-8")], page(title, body)).into_response();
+        }
+    };
+    let ttl = (config.labac.token_ttl.unwrap_or(crate::labac::TOKEN_TTL).as_secs().min(crate::labac::MAX_TTL as u64).max(1)) as i64;
+    let token = match crate::labac::issue_at(key, s, ttl, &levels) {
+        Ok(t) => t,
+        Err(e) => {
+            tracing::error!(%e, "labac token");
+            return internal_error().into_response();
+        }
+    };
+    let expires = now + chrono::Duration::seconds(ttl);
+    if json {
+        return (StatusCode::OK, no_store, Json(json!({ "token": token, "expires_at": expires.to_rfc3339(), "version": s.version,
+            "levels": levels }))).into_response();
+    }
+    let at = expires.format("%Y-%m-%d %H:%M UTC").to_string();
+    let title = crate::i18n::text_in(lang, "labac-token-title", &[]);
+    let body = format!("<p>{text}</p><textarea id=\"t\" readonly onfocus=\"this.select()\">{token}</textarea>\
+        <button type=\"button\" onclick=\"navigator.clipboard.writeText(document.getElementById('t').value)\">{copy}</button>",
+        text = crate::i18n::text_in(lang, "labac-token-text", &[("expires", &at)]),
+        copy = crate::i18n::text_in(lang, "labac-token-copy", &[]));
+    (StatusCode::OK, no_store, [(header::CONTENT_TYPE, "text/html; charset=utf-8")], page(title, body)).into_response()
+}
+
+/// [signed-in] The redirect after a sign-in, with a page of its own for a browser where it
+/// does not go through: the sign-in worked, the link to go on, a meta
+/// refresh - signon's page, or the site's (`Config::signed_in_page`, `{url}` filled in)
+#[cfg(feature = "oauth")]
+pub(crate) fn signed_in_redirect(state: &AccountState, url: &str) -> Response {
+    let body = signed_in_page(&state.config, url);
     (
-        jar,
-        axum::response::Redirect::to(&format!("{}{}", state.config.app_base_url, target)),
+        axum::http::StatusCode::SEE_OTHER,
+        [(axum::http::header::LOCATION, url.to_string()), (axum::http::header::CONTENT_TYPE, "text/html; charset=utf-8".to_string()),
+         (axum::http::header::CACHE_CONTROL, "no-store".to_string())],
+        body,
     )
         .into_response()
+}
+
+/// [signed-in] The page's HTML for `url`
+#[cfg(feature = "oauth")]
+pub(crate) fn signed_in_page(config: &crate::config::Config, url: &str) -> String {
+    let url = url.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;").replace('\'', "&#39;");
+    if let Some(page) = &config.signed_in_page {
+        return page.replace("{url}", &url);
+    }
+    let lang = config.site_lang();
+    let product = config.product_name.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;");
+    format!("<!doctype html><html lang=\"{lang}\"><head><meta charset=\"utf-8\">\
+        <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
+        <meta http-equiv=\"refresh\" content=\"2;url={url}\"><title>{title}</title>\
+        <style>body{{font-family:system-ui,sans-serif;max-width:32rem;margin:4rem auto;padding:0 1rem;line-height:1.5}}\
+        a{{display:inline-block;margin-top:1rem}}</style></head><body><h1>{title}</h1><p>{text}</p>\
+        <a href=\"{url}\">{go}</a></body></html>",
+        title = crate::i18n::text_in(lang, "signed-in-title", &[("product", &product)]),
+        text = crate::i18n::text_in(lang, "signed-in-text", &[]),
+        go = crate::i18n::text_in(lang, "signed-in-continue", &[]))
 }
 
 #[cfg(feature = "oauth")]
@@ -2138,5 +2242,24 @@ mod tests {
         assert_eq!(safe_redirect(Some("https://evil.example")), None);
         assert_eq!(safe_redirect(Some("dashboard")), None);
         assert_eq!(safe_redirect(None), None);
+    }
+}
+
+
+#[cfg(all(test, feature = "oauth"))]
+mod signed_in_tests {
+    use super::*;
+
+    /// [signed-in] signon's page: the title in the site's language, the link and the refresh,
+    /// the address escaped; a site's own template with `{url}` filled in
+    #[test]
+    fn the_page_after_a_sign_in_carries_the_link() {
+        let c = crate::config::Config::new("Acme <Co>", "https://acme.test");
+        let page = signed_in_page(&c, "https://acme.test/app?a=1&b=\"2\"");
+        assert!(page.contains("https://acme.test/app?a=1&amp;b=&quot;2&quot;"), "{page}");
+        assert!(page.contains("http-equiv=\"refresh\"") && page.contains("Signed in to Acme &lt;Co&gt;"), "{page}");
+        assert!(!page.contains("b=\"2\""), "nothing unescaped");
+        let own = crate::config::Config::new("Acme", "https://acme.test").with_signed_in_page("<p>go: <a href=\"{url}\">here</a></p>");
+        assert_eq!(signed_in_page(&own, "https://acme.test/x"), "<p>go: <a href=\"https://acme.test/x\">here</a></p>");
     }
 }

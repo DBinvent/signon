@@ -105,3 +105,15 @@ mail-signup-referer: "引荐来源"
 mail-signup-agent: "客户端"
 mail-signup-unconfirmed: "尚未确认 - 这只是订阅申请，不是双重确认。"
 mail-signup-all: "全部订阅："
+
+# === [signed-in] the page the redirect after a sign-in carries (src/routes.rs signed_in_page) ===
+signed-in-title: "已登录 %{product}"
+signed-in-text: "登录成功。如果此页面没有自动跳转, 请点击链接。"
+signed-in-continue: "继续"
+
+# === [labac] a person's database token page (src/routes.rs labac_token_answer) ===
+labac-token-title: "您的数据库令牌"
+labac-token-text: "将其用作通过 ytproxy 登录数据库的密码，或让您的应用设置它。有效期至 %{expires}。"
+labac-token-copy: "复制"
+labac-token-none: "尚未为您映射任何访问权限：请先通过您所在组织的身份提供方登录。"
+labac-token-level: "无法请求该级别：%{why}。"

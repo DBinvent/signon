@@ -105,3 +105,15 @@ mail-signup-referer: "リファラー"
 mail-signup-agent: "エージェント"
 mail-signup-unconfirmed: "未確認です - これは登録の申し込みで、ダブルオプトインではありません。"
 mail-signup-all: "すべての登録:"
+
+# === [signed-in] the page the redirect after a sign-in carries (src/routes.rs signed_in_page) ===
+signed-in-title: "%{product} にサインインしました"
+signed-in-text: "サインインしました。このページが自動で進まない場合はリンクを開いてください。"
+signed-in-continue: "続ける"
+
+# === [labac] a person's database token page (src/routes.rs labac_token_answer) ===
+labac-token-title: "データベース用トークン"
+labac-token-text: "ytproxy 経由のデータベースログインのパスワードとして使うか、アプリに設定させてください。有効期限は %{expires} です。"
+labac-token-copy: "コピー"
+labac-token-none: "まだアクセスが割り当てられていません。先に組織の ID プロバイダーでサインインしてください。"
+labac-token-level: "このレベルは要求できません：%{why}。"
