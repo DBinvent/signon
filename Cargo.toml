@@ -125,11 +125,11 @@ x509-parser = { version = "0.18", optional = true }
 
 [build-dependencies]
 # reads the notify templates when the crate is built (feature `notify-templates`)
-toml = { version = "0.8", optional = true }
+toml = { version = "1.2", optional = true }
 
 [dev-dependencies]
 # the tests of the build's own template reader (build/notify_templates.rs)
-toml = "0.8"
+toml = "1.2"
 tokio = { version = "1", features = ["full"] }
 # Drives the router in-process in the flow tests (`src/flow_tests.rs`).
 tower = { version = "0.5", features = ["util"] }
